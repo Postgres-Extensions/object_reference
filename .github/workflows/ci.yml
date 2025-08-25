@@ -14,6 +14,6 @@ jobs:
       - name: Check out the repo
         uses: actions/checkout@v4
       - name: Test on PostgreSQL ${{ matrix.pg }}
-        run: make test
+        run: make test PGUSER=postgres
       - name: Test pg_dump
-        run: make dump_test
+        run: make dump_test PGUSER=postgres
