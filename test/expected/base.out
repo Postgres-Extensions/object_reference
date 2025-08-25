@@ -3,7 +3,7 @@
 ok 1 - Role object_reference__dependency should be granted USAGE on schema _object_reference
 ok 2 - Role object_reference__dependency should be granted REFERENCES on table _object_reference.object
 ok 3 - CREATE TEMP TABLE test_object AS SELECT object_reference.object__getsert('table', 'test_table') AS object_id;
-ok 4 - Verify regclass field is correct
+ok 4 - Verify object_oid field is correct
 ok 5 - Existing object works, provides correct ID
 ok 6 - secondary may not be specified for table objects
 ok 7 - Verify count_nulls extension can not be relocated
