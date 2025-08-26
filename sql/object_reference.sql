@@ -3,35 +3,6 @@ SET LOCAL client_min_messages = WARNING;
 \echo You really, REALLY do NOT want to try and load this via psql!!!
 \echo It will FAIL during pg_dump! \quit
 
--- This BS is because count_nulls is relocatable, so could be in any schema
-DO $$
-BEGIN
-  RAISE DEBUG 'initial search_path = %', current_setting('search_path');
-  PERFORM set_config('search_path', current_setting('search_path') || ', ' || extnamespace::regnamespace::text, true) -- true = local only
-    FROM pg_extension
-    WHERE extname = 'count_nulls'
-  ;
-  RAISE DEBUG 'search_path changed to %', current_setting('search_path');
-END
-$$;
-/*
-DO $$
-DECLARE
-  c_schema CONSTANT name := (SELECT extnamespace::regnamespace::text FROM pg_extension WHERE extname = 'cat_tools');
-BEGIN
-  IF c_schema IS NULL THEN
-    RAISE 'extension cat_tools is not installed';
-  END IF;
-
-  IF c_schema <> 'cat_tools' THEN
-    RAISE 'having the cat_tools extension installed anywhere but the "cat_tools" schema is not currently supported'
-      USING DETAIL = format('current schema for cat_tools is %s', c_schema)
-    ;
-  END IF;
-END
-$$;
-*/
-
 DO $$
 BEGIN
   CREATE ROLE object_reference__usage NOLOGIN;
