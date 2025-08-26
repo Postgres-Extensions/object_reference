@@ -795,6 +795,7 @@ DECLARE
 
   r_object_v _object_reference._object_v;
   r_address record;
+  r_identity record;
 
   did_insert boolean := false;
 
@@ -820,6 +821,15 @@ BEGIN
         , objid
         , objsubid
       )
+    ;
+  END IF;
+
+  -- Refuse to track objects in temporary schemas
+  SELECT INTO r_identity * FROM pg_catalog.pg_identify_object(c_classid, objid, objsubid);
+  IF r_identity.schema IS NOT NULL AND (r_identity.schema LIKE 'pg_temp%' OR r_identity.schema LIKE 'pg_toast_temp%') THEN
+    RAISE 'cannot track temporary object'
+      USING DETAIL = format('object %s is in temporary schema %s', r_identity.identity, r_identity.schema)
+      , ERRCODE = 'feature_not_supported'
     ;
   END IF;
 

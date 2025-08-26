@@ -9,7 +9,7 @@ SELECT plan(
   +1 -- schema
   +3 -- initial
   +2 -- new functions
-  +2 -- errors
+  +3 -- errors (includes temp object test)
   +1 -- create extensions
 );
 
@@ -62,6 +62,15 @@ SELECT throws_ok(
   , NULL
   , 'secondary may not be specified for table objects'
   , 'secondary may not be specified for table objects'
+);
+
+-- Test temp object rejection
+CREATE TEMP TABLE temp_test_table();
+SELECT throws_ok(
+  $$SELECT object_reference.object__getsert('table', 'temp_test_table')$$
+  , '0A000' -- feature_not_supported
+  , 'cannot track temporary object'
+  , 'temp objects are rejected'
 );
 
 -- Create extensions

@@ -1,5 +1,5 @@
 \set ECHO none
-1..9
+1..10
 ok 1 - Role object_reference__dependency should be granted USAGE on schema _object_reference
 ok 2 - Role object_reference__dependency should be granted REFERENCES on table _object_reference.object
 ok 3 - CREATE TEMP TABLE test_object AS SELECT object_reference.object__getsert('table', 'test_table') AS object_id;
@@ -8,5 +8,6 @@ ok 5 - object__describe returns same result as pg_describe_object
 ok 6 - object__identity returns same result as pg_identify_object
 ok 7 - Existing object works, provides correct ID
 ok 8 - secondary may not be specified for table objects
-ok 9 - CREATE EXTENSION test_factory
+ok 9 - temp objects are rejected
+ok 10 - CREATE EXTENSION test_factory
 # TRANSACTION INTENTIONALLY LEFT OPEN!
