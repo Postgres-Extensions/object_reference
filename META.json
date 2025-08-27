@@ -79,6 +79,7 @@
         },
         "runtime": {
             "requires": {
+                "cat_tools": 0,
                 "plpgsql": 0
             }
         },

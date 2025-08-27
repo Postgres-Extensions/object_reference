@@ -56,7 +56,7 @@ CREATE FUNCTION __object_reference.create_function(
   , grants text DEFAULT NULL
 ) RETURNS void LANGUAGE plpgsql AS $body$
 DECLARE
-  c_clean_args text := cat_tools.function__arg_types_text(args);
+  c_clean_args text := cat_tools.routine__parse_arg_types_text(args);
 
   create_template CONSTANT text := $template$
 CREATE OR REPLACE FUNCTION %s(
