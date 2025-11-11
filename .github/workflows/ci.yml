@@ -15,10 +15,12 @@ jobs:
         uses: actions/checkout@v4
       - name: Test on PostgreSQL ${{ matrix.pg }}
         run: make test PGUSER=postgres
+        continue-on-error: true
       - name: Output failed results
         run: |
           if [ -e test/regression.out ]; then
             ls -la /etc/postgresql/${{ matrix.pg }}/
             ls -la /etc/postgresql/${{ matrix.pg }}/test/
             cat /etc/postgresql/${{ matrix.pg }}/test/log
+            exit 1
           fi
