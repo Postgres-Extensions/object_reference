@@ -19,8 +19,8 @@ jobs:
       - name: Output failed results
         run: |
           if [ -e test/regression.out ]; then
-            ls -la /etc/postgresql/${{ matrix.pg }}/
-            ls -la /etc/postgresql/${{ matrix.pg }}/test/
-            cat /etc/postgresql/${{ matrix.pg }}/test/log
+            ls -la /var/log
+            ls -la /var/log/postgresql/
+            cat /var/log/postgresql/postgresql-${{ matrix.pg }}-test.log
             exit 1
           fi
