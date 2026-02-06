@@ -424,7 +424,7 @@ SELECT __object_reference.create_function(
   , $body$
 SELECT cat_tools.objects__shared()
   || cat_tools.objects__address_unsupported()
-  || '{event trigger}'
+  || '{event trigger, partitioned table, partitioned index}'
 $body$
   , 'Returns array of object types that are not supported.'
   , 'object_reference__usage'
