@@ -131,8 +131,10 @@ dist: html
 # But don't add it as an install or test dependency unless we do have asciidoc
 ifneq (,$(strip $(ASCIIDOC)))
 
-# Need to do this so install & co will pick up ALL targets. Unfortunately this can result in some duplication.
-DOCS += $(ASCIIDOC_HTML)
+# Need to do this so install & co will pick up ALL targets. Use filter-out to
+# avoid duplicating html files that are already in DOCS (e.g. committed .html
+# alongside their .adoc source).
+DOCS := $(sort $(filter-out $(ASCIIDOC_HTML),$(DOCS)) $(ASCIIDOC_HTML))
 
 # Also need to add html as a dep to all (which will get picked up by install & installcheck
 all: html
