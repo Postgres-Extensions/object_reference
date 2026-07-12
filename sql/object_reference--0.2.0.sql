@@ -1,3 +1,4 @@
+/* DO NOT EDIT - AUTO-GENERATED FILE */
 SET LOCAL client_min_messages = WARNING;
 \echo This extension must be loaded via 'CREATE EXTENSION object_reference;'
 \echo You really, REALLY do NOT want to try and load this via psql!!!

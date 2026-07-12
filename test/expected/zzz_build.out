@@ -2,18 +2,16 @@
 This extension must be loaded via CREATE EXTENSION object_reference;
 You really, REALLY do NOT want to try and load this via psql!!!
 
-psql:test/temp_load.not_sql:188: WARNING:  I promise you will be sorry if you try to use this as anything other than an extension!
+psql:test/temp_load.not_sql:159: WARNING:  I promise you will be sorry if you try to use this as anything other than an extension!
 
-psql:test/temp_load.not_sql:189: WARNING:  I promise you will be sorry if you try to use this as anything other than an extension!
-
-
+psql:test/temp_load.not_sql:160: WARNING:  I promise you will be sorry if you try to use this as anything other than an extension!
 
 
 
 
-psql:test/temp_load.not_sql:513: WARNING:  I promise you will be sorry if you try to use this as anything other than an extension!
 
 
+psql:test/temp_load.not_sql:414: WARNING:  I promise you will be sorry if you try to use this as anything other than an extension!
 
 
 
@@ -21,9 +19,15 @@ psql:test/temp_load.not_sql:513: WARNING:  I promise you will be sorry if you tr
 
 
 
-psql:test/temp_load.not_sql:620: WARNING:  I promise you will be sorry if you try to use this as anything other than an extension!
 
-psql:test/temp_load.not_sql:627: WARNING:  I promise you will be sorry if you try to use this as anything other than an extension!
+
+psql:test/temp_load.not_sql:521: WARNING:  I promise you will be sorry if you try to use this as anything other than an extension!
+
+psql:test/temp_load.not_sql:528: WARNING:  I promise you will be sorry if you try to use this as anything other than an extension!
+
+
+
+
 
 
 

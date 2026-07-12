@@ -1,5 +1,5 @@
 comment = 'Provides reference IDs for database objects'
-default_version = '0.1.0'
+default_version = '0.2.0'
 relocatable = false
 schema = 'object_reference'
 requires = 'cat_tools, count_nulls'

@@ -8,8 +8,8 @@ SELECT plan(
   0
   +1 -- schema
   +3 -- initial
-  +2 -- errors
-  +2 -- move
+  +2 -- new functions
+  +3 -- errors (includes temp object test)
   +1 -- create extensions
 );
 
@@ -32,9 +32,23 @@ SELECT lives_ok(
   , $$CREATE TEMP TABLE test_object AS SELECT object_reference.object__getsert('table', 'test_table') AS object_id;$$
 );
 SELECT is(
-  (SELECT regclass FROM _object_reference._object_v WHERE object_id = (SELECT object_id FROM test_object))
-  , 'test_table'::regclass
-  , 'Verify regclass field is correct'
+  (SELECT object_oid FROM _object_reference._object_v WHERE object_id = (SELECT object_id FROM test_object))
+  , 'test_table'::regclass::oid
+  , 'Verify object_oid field is correct'
+);
+
+-- Test object__describe function
+SELECT is(
+  object_reference.object__describe((SELECT object_id FROM test_object))
+  , pg_catalog.pg_describe_object('pg_class'::regclass, 'test_table'::regclass, 0)
+  , 'object__describe returns same result as pg_describe_object'
+);
+
+-- Test object__identity function  
+SELECT results_eq(
+  $$SELECT * FROM object_reference.object__identity((SELECT object_id FROM test_object))$$
+  , $$SELECT type, schema, name, identity FROM pg_catalog.pg_identify_object('pg_class'::regclass, 'test_table'::regclass, 0)$$
+  , 'object__identity returns same result as pg_identify_object'
 );
 SELECT is(
   object_reference.object__getsert('table', 'test_table')
@@ -50,24 +64,13 @@ SELECT throws_ok(
   , 'secondary may not be specified for table objects'
 );
 
-/*
- * I'm not sure if our extension would continue working if count_nulls was
- * relocated. Currently a moot point since relocation isn't supported, but I'd
- * already coded the second test so might as well leave it here in case it
- * changes in the future.
- */
-\set null_schema test_relocate_count_nulls
-CREATE SCHEMA :null_schema;
+-- Test temp object rejection
+CREATE TEMP TABLE temp_test_table();
 SELECT throws_ok(
-  $$ALTER EXTENSION count_nulls SET SCHEMA $$ || :'null_schema'
-  , '0A000'
-  , NULL
-  , 'Verify count_nulls extension can not be relocated'
-);
-SELECT is(
-  object_reference.object__getsert('table', 'test_table')
-  , (SELECT object_id FROM test_object)
-  , 'Still works after moving the count_nulls extension'
+  $$SELECT object_reference.object__getsert('table', 'temp_test_table')$$
+  , '0A000' -- feature_not_supported
+  , 'cannot track temporary object'
+  , 'temp objects are rejected'
 );
 
 -- Create extensions
