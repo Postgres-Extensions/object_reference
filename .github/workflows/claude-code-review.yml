@@ -31,7 +31,6 @@ jobs:
     permissions:
       contents: read
       pull-requests: write   # post the review comments
-      id-token: write
     steps:
       - name: Check out PR head (read-only context)
         # Intentionally tracks the major-version tag (not a pinned SHA) so
@@ -47,6 +46,11 @@ jobs:
         uses: anthropics/claude-code-action@v1
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          # Provide github_token so the action uses it directly for GitHub API
+          # calls instead of the OIDC->GitHub-App-token exchange, which 401s under
+          # pull_request_target. GITHUB_TOKEN is repo/workflow-scoped (independent
+          # of the actor's role) and has pull-requests: write here.
+          github_token: ${{ secrets.GITHUB_TOKEN }}
           # NOTE: plugin_marketplaces can't be pinned — it tracks the
           # marketplace repo's default branch (upstream anthropics/claude-code).
           plugin_marketplaces: 'https://github.com/anthropics/claude-code.git'
