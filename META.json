@@ -9,14 +9,14 @@
     "X_comment": "Keys marked REQUIRED or Optional are what you'd expect. Keys marked Unusual are keys you don't normally need to use.",
     "X_comment": "The pgxntool Makefile will strip out empty keys to produce a working META.json, so it's fine to leave them here.",
     "X_comment": "NOTE: Don't get too cute with reformatting this file... some of the processing against it doesn't use a full JSON parser",
-    "X_comment": "I've tried to put things in a logical order. Comments welcome at https://github.com/decibel/pgxntool/issues!",
+    "X_comment": "I've tried to put things in a logical order. Comments welcome at https://github.com/Postgres-Extensions/pgxntool/issues!",
 
     "X_comment": "REQUIRED. Name of distribution.",
     "X_comment": "Note! Distribution names currently can't contain spaces.",
     "name": "object_reference",
 
     "X_comment": "REQUIRED. Version of the distribution. http://pgxn.org/spec/#version",
-    "version": "0.1.0",
+    "version": "0.2.0",
 
     "X_comment": "REQUIRED. Short description of distribution.",
     "abstract": "Provides immutable references to Postgres objects.",
@@ -40,7 +40,7 @@
             "file": "sql/object_reference.sql",
 
             "X_comment": "REQUIRED. Version the extension is at.",
-            "version": "0.1.0",
+            "version": "0.2.0",
 
             "X_comment": "Optional: \"abstract\": Description of the extension.",
             "abstract": "Provides immutable references to Postgres objects.",
@@ -56,13 +56,13 @@
 
     "X_comment": "Optional. \"resources\": Web resources available for this distribution. http://pgxn.org/spec/#resources",
     "resources": {
-        "homepage": "http://github.com/decibel/object_reference/",
+        "homepage": "http://github.com/Postgres-Extensions/object_reference/",
         "bugtracker": {
-            "web": "http://github.com/decibel/object_reference/issues"
+            "web": "http://github.com/Postgres-Extensions/object_reference/issues"
         },
         "repository": {
-            "url": "git://github.com/decibel/object_reference.git",
-            "web": "http://github.com/decibel/object_reference/",
+            "url": "git://github.com/Postgres-Extensions/object_reference.git",
+            "web": "http://github.com/Postgres-Extensions/object_reference/",
             "type": "git"
         }
     },
@@ -74,11 +74,12 @@
 
         "build": {
             "requires": {
-                "PostgreSQL": "9.5.0"
+                "PostgreSQL": "13.0"
             }
         },
         "runtime": {
             "requires": {
+                "cat_tools": 0,
                 "plpgsql": 0
             }
         },
@@ -92,7 +93,7 @@
     "X_comment": "Unusual. \"no_index\": Files/directories that should not be indexed. http://pgxn.org/spec/#no_index",
 
     "X_comment": "Unusual. Package/tool used to generate this file.",
-    "generated_by": "pgxntool https://github.com/decibel/pgxntool",
+    "generated_by": "pgxntool https://github.com/Postgres-Extensions/pgxntool",
 
     "X_comment": "REQUIRED. Version info for this file. http://pgxn.org/spec/#meta-spec",
     "meta-spec": {

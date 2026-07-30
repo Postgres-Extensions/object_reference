@@ -2,8 +2,8 @@
 
 \i test/load.sql
 
-CREATE TEMP TABLE test_table_1(col1 int, col2 int);
-CREATE TEMP TABLE test_table_2(col1 int, col2 int);
+CREATE TABLE object_group_test_table_1(col1 int, col2 int);
+CREATE TABLE object_group_test_table_2(col1 int, col2 int);
 
 CREATE FUNCTION pg_temp.bogus_group(
   command_template text
@@ -40,10 +40,12 @@ SELECT plan(
   +4      -- __object__remove
 
   +4 + 2  -- __remove
+  +4      -- cleanup tests
+  +1      -- final group removal (there was always an extra test)
 );
 
 SELECT lives_ok(
-  $$CREATE TEMP TABLE test_table_1_id AS SELECT * FROM object_reference.object__getsert('table', 'test_table_1')$$
+  $$CREATE TEMP TABLE test_table_1_id AS SELECT * FROM object_reference.object__getsert('table', 'object_group_test_table_1')$$
   , 'Register test table 1'
 );
 
@@ -102,37 +104,37 @@ SELECT lives_ok(
 
 -- object__getsert
 SELECT throws_ok( -- Can't use helper here
-  $$CREATE TEMP TABLE col1_id AS SELECT * FROM object_reference.object__getsert('table column', 'test_table_1', 'col1', 'absurd group name used only for testing purposes ktxbye')$$
+  $$CREATE TEMP TABLE col1_id AS SELECT * FROM object_reference.object__getsert('table column', 'object_group_test_table_1', 'col1', 'absurd group name used only for testing purposes ktxbye')$$
   , 'P0002'
   , 'object group "absurd group name used only for testing purposes ktxbye" does not exist'
   , 'object__getsert with bogus group name'
 );
 /* TODO
 SELECT throws_ok( -- Can't use helper here
-  $$CREATE TEMP TABLE col1_id AS SELECT * FROM object_reference.object__getsert_w_group_id('table column', 'test_table_1', 'col1', -1)$$
+  $$CREATE TEMP TABLE col1_id AS SELECT * FROM object_reference.object__getsert_w_group_id('table column', 'object_group_test_table_1', 'col1', -1)$$
   , ''
   , ''
   , 'object__getsert with bogus group id'
 );
 */
 SELECT lives_ok(
-  $$CREATE TEMP TABLE col1_id AS SELECT * FROM object_reference.object__getsert('table column', 'test_table_1', 'col1', 'object reference test group')$$
+  $$CREATE TEMP TABLE col1_id AS SELECT * FROM object_reference.object__getsert('table column', 'object_group_test_table_1', 'col1', 'object reference test group')$$
   , 'Register test column'
 );
 SELECT lives_ok(
-  $$CREATE TEMP TABLE test_table_2_id AS SELECT * FROM object_reference.object__getsert('table', 'test_table_2', object_group_name := 'object reference test group')$$
+  $$CREATE TEMP TABLE test_table_2_id AS SELECT * FROM object_reference.object__getsert('table', 'object_group_test_table_2', object_group_name := 'object reference test group')$$
   , 'Register test table 2'
 );
 
 -- Drop tests
 SELECT throws_ok(
-  $$ALTER TABLE test_table_1 DROP COLUMN col1$$
+  $$ALTER TABLE object_group_test_table_1 DROP COLUMN col1$$
   , '23503'
   , NULL -- current error is crap anyway
   , 'Dropping col1 fails'
 );
 SELECT throws_ok(
-  $$DROP TABLE test_table_2$$
+  $$DROP TABLE object_group_test_table_2$$
   , '23503'
   , NULL -- current error is crap anyway
   , 'Dropping test_table_2 fails'
@@ -144,7 +146,7 @@ SELECT throws_ok(
   , 'Removing test group fails'
 );
 SELECT lives_ok(
-  $$ALTER TABLE test_table_1 DROP COLUMN col2$$
+  $$ALTER TABLE object_group_test_table_1 DROP COLUMN col2$$
   , 'Dropping col2 works'
 );
 
@@ -178,7 +180,7 @@ SELECT lives_ok(
   , '__object__remove() for test_table_1 works'
 );
 SELECT throws_ok(
-  $$DROP TABLE test_table_1$$ -- Should not work because column is still registered
+  $$DROP TABLE object_group_test_table_1$$ -- Should not work because column is still registered
   , '23503'
   , NULL -- current error is crap anyway
   , 'Dropping test_table_1 fails'
@@ -211,6 +213,26 @@ SELECT lives_ok(
   )
   , '__object__remove() for test_table_2 works'
 );
+
+-- Test automatic cleanup via trigger
+SELECT lives_ok(
+  $$CREATE TEMP TABLE cleanup_test_id AS SELECT * FROM object_reference.object__getsert('table', 'object_group_test_table_1', object_group_name := 'object reference test group')$$
+  , 'Add test table back to group for cleanup test'
+);
+SELECT ok(
+  EXISTS(SELECT 1 FROM _object_reference.object WHERE object_id = (SELECT object__getsert FROM cleanup_test_id))
+  , 'Object exists before cleanup test'
+);
+SELECT lives_ok(
+  $$DELETE FROM _object_reference.object_group__object WHERE object_id = (SELECT object__getsert FROM cleanup_test_id)$$
+  , 'Remove from group triggers automatic cleanup attempt'
+);
+-- Object should be deleted because it's no longer in any group and trigger calls cleanup
+SELECT ok(
+  NOT EXISTS(SELECT 1 FROM _object_reference.object WHERE object_id = (SELECT object__getsert FROM cleanup_test_id))
+  , 'Object was automatically cleaned up after group removal'
+);
+
 SELECT lives_ok(
   $$SELECT object_reference.object_group__remove('object reference test group')$$
   , 'Removing empty group works'
