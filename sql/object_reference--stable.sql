@@ -1,5 +1,4 @@
 /* DO NOT EDIT - AUTO-GENERATED FILE */
-SET LOCAL client_min_messages = WARNING;
 \echo This extension must be loaded via 'CREATE EXTENSION object_reference;'
 \echo You really, REALLY do NOT want to try and load this via psql!!!
 \echo It will FAIL during pg_dump! \quit
@@ -188,6 +187,7 @@ CREATE TABLE _object_reference.object(
     */
 );
 SELECT __object_reference.safe_dump('_object_reference.object');
+SELECT __object_reference.safe_dump('_object_reference.object_object_id_seq');
 GRANT REFERENCES ON _object_reference.object TO object_reference__dependency;
 
 CREATE TABLE _object_reference._object_oid(
@@ -357,7 +357,7 @@ BEGIN
   IF object_type IS NULL THEN
     -- Should definitely exist
     SELECT INTO STRICT object_type, classid, objid, objsubid
-        o.object_type, a.classid, a.objid, a.subobjid
+        o.object_type, a.classid, a.objid, a.objsubid
       FROM _object_reference.object o
         , pg_catalog.pg_get_object_address(o.object_type::text, o.object_names, o.object_args) a
       WHERE o.object_id = _object_oid__add.object_id
@@ -1366,6 +1366,8 @@ BEGIN
       USING HINT = 'Did you not start a transaction? Did you forget to call object_reference.capture__stop()?'
     ;
   END IF;
+
+  RETURN NULL;
 END
 $body$
   , 'Trigger function to ensure capture__stop() is called an appropriate number of times.'
@@ -1509,14 +1511,59 @@ $body$
   , 'Event trigger function to drop object records when objects are removed.'
 );
 
-/*
-CREATE OR REPLACE FUNCTION snitch() RETURNS event_trigger AS $$
+SELECT __object_reference.create_function(
+  '_object_reference.etg_raise__start'
+  , ''
+  , 'event_trigger LANGUAGE plpgsql'
+  , $body$
 BEGIN
-    RAISE WARNING 'snitch: % %', tg_event, tg_tag;
+    RAISE WARNING 'etg_raise__start: % %', tg_event, tg_tag;
 END;
-$$ LANGUAGE plpgsql;
-CREATE EVENT TRIGGER snitch ON ddl_command_start EXECUTE PROCEDURE snitch();
-*/
+$body$
+  , $$Event trigger function to report on DDL activity. Example trigger:
+CREATE EVENT TRIGGER start
+  ON ddl_command_start
+  --WHEN tag IN ( 'ALTER TABLE', 'DROP TABLE' )
+  EXECUTE PROCEDURE _object_reference.etg_raise__start()
+;
+$$);
+SELECT __object_reference.create_function(
+  '_object_reference.etg_raise__drop'
+  , ''
+  , 'event_trigger LANGUAGE plpgsql'
+  , $body$
+DECLARE
+  r record;
+BEGIN
+  FOR r IN SELECT classid, objid, objsubid, object_type, schema_name, object_name, object_identity FROM pg_catalog.pg_event_trigger_dropped_objects() LOOP
+    RAISE WARNING 'dropped_objects:
+    classid: %
+    objid: %
+    objsubid: %
+    object_type: %
+    schema_name: %
+    object_name: %
+    object_identity: %
+    '
+      -- :^r" s/\([^ ]\+\):.*/, r.\1/
+      , r.classid
+      , r.objid
+      , r.objsubid
+      , r.object_type
+      , r.schema_name
+      , r.object_name
+      , r.object_identity
+    ;
+  END LOOP;
+END;
+$body$
+  , $$Event trigger function to report on DDL activity. Example trigger:
+CREATE EVENT TRIGGER drop
+  ON sql_drop
+  --WHEN tag IN ( 'ALTER TABLE', 'DROP TABLE' )
+  EXECUTE PROCEDURE _object_reference.etg_raise__drop()
+;
+$$);
 
 CREATE EVENT TRIGGER zzz__object_reference_drop
   ON sql_drop
