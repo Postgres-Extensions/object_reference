@@ -85,7 +85,7 @@ CREATE FUNCTION __object_reference.create_function(
   , grants text DEFAULT NULL
 ) RETURNS void LANGUAGE plpgsql AS $body$
 DECLARE
-  c_clean_args text := cat_tools.function__arg_types_text(args);
+  c_clean_args text := cat_tools.routine__parse_arg_types_text(args);
 
   create_template CONSTANT text := $template$
 CREATE OR REPLACE FUNCTION %s(
@@ -572,7 +572,8 @@ foreign table, foreign table column, aggregate, collation, conversion, language,
 large object, operator, operator class, operator family, operator of access method,
 function of access method, rule, text search parser, text search dictionary,
 text search template, text search configuration, foreign-data wrapper, server,
-user mapping, default acl, transform, access method, extension, policy
+user mapping, default acl, transform, access method, extension, policy,
+partitioned table, partitioned index
 }'::cat_tools.object_type[]
 $body$
   , 'Returns array of object types that have not been tested.'
