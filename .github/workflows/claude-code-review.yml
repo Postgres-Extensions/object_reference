@@ -13,7 +13,7 @@ name: Claude Code Review
 # read context (persist-credentials: false) and never build or execute PR code.
 on:
   pull_request_target:
-    types: [opened, synchronize, reopened, ready_for_review]
+    types: [opened, synchronize, reopened, ready_for_review, labeled]
 
 concurrency:
   group: claude-review-${{ github.event.pull_request.number }}
@@ -22,10 +22,14 @@ concurrency:
 jobs:
   claude-review:
     # Trusted fork only, and skip drafts (don't spend API/CI on unfinished PRs).
-    # To add more trusted owners, extend the head-owner check.
+    # To add more trusted owners, extend the head-owner check. `labeled` is
+    # only in the trigger list so the claude-debug toggle below can kick off a
+    # fresh run without a push; scope it tightly here so an unrelated label
+    # doesn't re-run this (paid) workflow.
     if: >-
       github.event.pull_request.draft == false &&
-      github.event.pull_request.head.repo.owner.login == 'jnasbyupgrade'
+      github.event.pull_request.head.repo.owner.login == 'jnasbyupgrade' &&
+      (github.event.action != 'labeled' || github.event.label.name == 'claude-debug')
     runs-on: ubuntu-latest
     timeout-minutes: 60
     permissions:
@@ -33,6 +37,23 @@ jobs:
       pull-requests: write   # post the review comments
       checks: read           # read sibling check-runs for the cost gate
     steps:
+      # Live-query the claude-debug label rather than trusting
+      # github.event.pull_request.labels (the event payload captured at
+      # trigger time): GitHub's "Re-run jobs" replays that ORIGINAL stored
+      # payload, so a payload-based check would miss a label added after a
+      # run already started. A live `gh pr view` call always reflects the
+      # PR's current labels, whether this is a fresh trigger or a re-run.
+      - name: Check for claude-debug label (live)
+        id: debug_label
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          PR: ${{ github.event.pull_request.number }}
+        run: |
+          debug=$(gh pr view "$PR" --repo "$REPO" --json labels --jq 'any(.labels[]; .name == "claude-debug")')
+          echo "debug=$debug" >> "$GITHUB_OUTPUT"
+          echo "claude-debug label present: $debug"
+
       # COST GATE: the paid Claude review is the last thing to run. Wait for the
       # PR head's OTHER check-runs to finish and only proceed if they are clean.
       # If any sibling check failed we skip the review to avoid spending money
@@ -41,7 +62,9 @@ jobs:
       #   - decision=run  : all sibling checks completed with a good conclusion,
       #                     OR no sibling checks exist after a short grace window
       #                     (nothing to gate on), OR the poll timed out is treated
-      #                     as skip (see below).
+      #                     as skip (see below), OR the claude-debug label is
+      #                     present (skip the wait entirely for fast debug
+      #                     iteration; see the live-query step above).
       #   - decision=skip : at least one sibling check failed/cancelled/etc, or
       #                     we timed out waiting for still-pending checks.
       # We exclude this workflow's own check-run (job name `claude-review`) so the
@@ -52,7 +75,13 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           REPO: ${{ github.repository }}
           SHA: ${{ github.event.pull_request.head.sha }}
+          DEBUG_LABEL: ${{ steps.debug_label.outputs.debug }}
         run: |
+          if [ "$DEBUG_LABEL" = "true" ]; then
+            echo "claude-debug label present — skipping cost gate wait"
+            echo "decision=run" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
           decision=skip
           for i in $(seq 1 72); do   # ~24 min max
             json=$(gh api "repos/$REPO/commits/$SHA/check-runs" --paginate \
@@ -78,7 +107,7 @@ jobs:
         if: steps.gate.outputs.decision == 'run'
         # Intentionally tracks the major-version tag (not a pinned SHA) so
         # upstream fixes are picked up automatically.
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           repository: ${{ github.event.pull_request.head.repo.full_name }}
           ref: ${{ github.event.pull_request.head.sha }}
@@ -95,10 +124,25 @@ jobs:
           # pull_request_target. GITHUB_TOKEN is repo/workflow-scoped (independent
           # of the actor's role) and has pull-requests: write here.
           github_token: ${{ secrets.GITHUB_TOKEN }}
+          # Post (and keep updating) a live tracking-comment checklist as
+          # Claude works, instead of staying silent until the whole run
+          # finishes — without this, the cost gate above plus the review
+          # itself can leave a PR with zero visible progress for the better
+          # part of an hour. Disabled specifically for `labeled`-triggered
+          # runs: the action's own track_progress validation only accepts
+          # opened/synchronize/reopened/ready_for_review for pull_request(_target)
+          # events and throws for any other action, and `labeled` is exactly
+          # how the claude-debug toggle re-triggers this workflow.
+          track_progress: ${{ github.event.action != 'labeled' }}
           # NOTE: plugin_marketplaces can't be pinned — it tracks the
           # marketplace repo's default branch (upstream anthropics/claude-code).
           plugin_marketplaces: 'https://github.com/anthropics/claude-code.git'
           plugins: 'code-review@claude-code-plugins'
+          # claude-debug label (live-queried above) turns on the raw JSON
+          # transcript for debugging. Normally off: it can include tool
+          # execution results, which shouldn't be publicly visible in Actions
+          # logs.
+          show_full_output: ${{ steps.debug_label.outputs.debug == 'true' }}
           # --comment is required: without it, the code-review plugin only
           # prints its findings to the job log and never posts anything to
           # the PR (confirmed by capturing the hidden SDK transcript on a
