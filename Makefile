@@ -17,10 +17,23 @@ extra_clean += $(wildcard test/dump/*.log)
 dump_test: test/dump/run.sh test/helpers/object_table.sql $(wildcard test/dump/*.sql)
 	$< -f # Force drop of databases if they exist
 
+CAT_TOOLS_VERSION = 0.3.0
+CAT_TOOLS_BUILD_DIR = tmp/cat_tools-$(CAT_TOOLS_VERSION)
+extra_clean += $(CAT_TOOLS_BUILD_DIR)
+
 .PHONY: cat_tools
 cat_tools: $(DESTDIR)$(datadir)/extension/cat_tools.control
 $(DESTDIR)$(datadir)/extension/cat_tools.control:
-	pgxn install --unstable cat_tools
+	# `pgxn install --unstable cat_tools` resolves to the newest release
+	# published to the PGXN package index, which is still 0.2.1 -- it fails
+	# standalone on modern PostgreSQL with "column oid specified more than
+	# once" at CREATE EXTENSION. A fixed release, 0.3.0, is tagged in
+	# cat_tools' own git repo but hasn't been uploaded to PGXN yet, so build
+	# it from that tag directly until PGXN has it.
+	rm -rf $(CAT_TOOLS_BUILD_DIR)
+	git clone --branch $(CAT_TOOLS_VERSION) --depth 1 https://github.com/Postgres-Extensions/cat_tools.git $(CAT_TOOLS_BUILD_DIR)
+	$(MAKE) -C $(CAT_TOOLS_BUILD_DIR) install PG_CONFIG=$(PG_CONFIG) DESTDIR=$(DESTDIR)
+	rm -rf $(CAT_TOOLS_BUILD_DIR)
 
 .PHONY: count_nulls
 count_nulls: $(DESTDIR)$(datadir)/extension/count_nulls.control
