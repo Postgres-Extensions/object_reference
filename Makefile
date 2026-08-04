@@ -45,3 +45,23 @@ test_factory: $(DESTDIR)$(datadir)/extension/test_factory.control
 $(DESTDIR)$(datadir)/extension/test_factory.control:
 	pgxn install test_factory
 
+
+# Style linter (see https://github.com/Postgres-Extensions/linter, vendored
+# at .vendor/linter -- lint.mk is the thin local hand-off, see its comment).
+# Scoped to sql/object_reference.sql rather than the default `sql/ test/`:
+# the versioned install/update files under sql/ (object_reference--*.sql,
+# e.g. object_reference--0.1.0.sql/--stable.sql) are frozen once released and
+# never hand-edited again (see this repo's CLAUDE.md / memory), so linting
+# them would produce permanent, unfixable findings and make `make lint`
+# unusable as a CI gate.
+#
+# Guarded on .git being present: a tarball build (PGXN distribution, or any
+# `git archive` checkout with no .git) has no submodule to initialize, and
+# Make resolves every `include` before running any target regardless of
+# which target was requested -- so an unguarded self-init rule in lint.mk
+# would break `make`/`make install` entirely for a tarball build, not just
+# `make lint`.
+ifneq ($(wildcard .git),)
+LINT_TARGETS = sql/object_reference.sql test/
+include lint.mk
+endif

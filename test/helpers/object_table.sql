@@ -144,6 +144,7 @@ INSERT INTO test_prereq VALUES
 ;
 
 -- \N is null character
+-- sql-lint:disable-block prefer-short-type: secondary column mirrors pg_catalog's own type display name (format_type), not a style choice
 COPY test_object(object_type, object_name, secondary, create_command, drop_command) FROM STDIN (DELIMITER '|');
 table|test table||%("test column" int)|
 index|test table test index||%ON "test table"("test column")|
@@ -159,8 +160,9 @@ cast|test type|integer|CREATE CAST ("test type" AS int4) WITH INOUT|DROP CAST ("
 default value|test table|test column|ALTER TABLE "test table" ALTER "test column" SET DEFAULT 0|ALTER TABLE "test table" ALTER "test column" DROP DEFAULT
 trigger|test table|test trigger|CREATE TRIGGER "test trigger" AFTER INSERT ON "test table" FOR EACH ROW EXECUTE PROCEDURE tg_null()|DROP TRIGGER "test trigger" ON "test table"
 \.
+-- sql-lint:enable-block
 
-/* Not supported
+/* EXCLUDED CODE: Not supported
 composite type|test complex type||CREATE TYPE "test complex type" AS(r real, i real)|DROP TYPE "test complex type"
 view column|test view|test column|\N|\N
 materialized view column|test materialized view 2|test materialized view column|CREATE MATERIALIZED VIEW "test materialized view 2" AS SELECT (1,2)::"test complex type" AS "test materialized view column"|DROP MATERIALIZED VIEW "test materialized view 2"

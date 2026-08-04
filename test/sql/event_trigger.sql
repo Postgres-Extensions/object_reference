@@ -143,7 +143,7 @@ $body$;
 
 
 /*
- *Rename column
+ * Rename column
  */
 SELECT lives_ok(
   $$ALTER TABLE table_under_test RENAME column_test TO test_column2$$
