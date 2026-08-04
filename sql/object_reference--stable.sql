@@ -14,7 +14,7 @@ BEGIN
   RAISE DEBUG 'search_path changed to %', current_setting('search_path');
 END
 $$;
-/*
+/* EXCLUDED CODE: schema-restriction check below not currently enforced
 DO $$
 DECLARE
   c_schema CONSTANT name := (SELECT extnamespace::regnamespace::text FROM pg_extension WHERE extname = 'cat_tools');
@@ -180,7 +180,7 @@ CREATE TABLE _object_reference.object(
   , object_names text[]                  NOT NULL
   , object_args  text[]                  NOT NULL
   , CONSTRAINT object__u_object_names__object_args UNIQUE( object_type, object_names, object_args )
-  /* TODO: this can't be a trigger because some objects won't exist when a dump is loaded
+  /* EXCLUDED CODE: TODO: this can't be a trigger because some objects won't exist when a dump is loaded
   , CONSTRAINT object__address_sanity
     -- pg_get_object_address will throw an error if anything is wrong, so the IS NOT NULL is mostly pointless
     CHECK( pg_catalog.pg_get_object_address(object_type::text, object_names, object_args) IS NOT NULL )
@@ -193,7 +193,7 @@ GRANT REFERENCES ON _object_reference.object TO object_reference__dependency;
 CREATE TABLE _object_reference._object_oid(
   object_id       int                     PRIMARY KEY REFERENCES _object_reference.object ON DELETE CASCADE ON UPDATE CASCADE
   , classid       regclass                NOT NULL
-  /* TODO: needs to be a trigger
+  /* EXCLUDED CODE: TODO: needs to be a trigger
     CONSTRAINT classid_must_match__object__address_classid
       CHECK( classid IS NOT DISTINCT FROM cat_tools.object__address_classid(object_type) )
     */
@@ -1254,7 +1254,7 @@ BEGIN
   RETURN c_next_level;
 
 EXCEPTION WHEN undefined_table THEN
-  /*
+  /* EXCLUDED CODE
   CREATE TEMP TABLE __object_reference__ddl_capture AS
     SELECT c_next_level, capture__start.object_group_id
   ;

@@ -134,7 +134,7 @@ SELECT bag_eq(
   , $$SELECT object_id FROM obj_ref$$
   , 'Verify captured object IDs match'
 );
-/*
+/* EXCLUDED CODE
 SELECT * FROM og_o;
 SELECT * FROM _object_reference.object;-- WHERE object_id IN(6,9);
 */
