@@ -82,7 +82,7 @@ SELECT is(
 );
 
 -- __object__add
-/* TODO
+/* EXCLUDED CODE: TODO
 SELECT pg_temp.bogus_group(
   format(
     $$SELECT object_reference.object_group__object__add(%%s, %s)$$
@@ -107,7 +107,7 @@ SELECT throws_ok( -- Can't use helper here
   , 'object group "absurd group name used only for testing purposes ktxbye" does not exist'
   , 'object__getsert with bogus group name'
 );
-/* TODO
+/* EXCLUDED CODE: TODO
 SELECT throws_ok( -- Can't use helper here
   $$CREATE TEMP TABLE col1_id AS SELECT * FROM object_reference.object__getsert_w_group_id('table column', 'test_table_1', 'col1', -1)$$
   , ''
