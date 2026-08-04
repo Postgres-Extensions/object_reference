@@ -21,9 +21,9 @@ psql:test/temp_load.not_sql:512: WARNING:  I promise you will be sorry if you tr
 
 
 
-psql:test/temp_load.not_sql:620: WARNING:  I promise you will be sorry if you try to use this as anything other than an extension!
+psql:test/temp_load.not_sql:624: WARNING:  I promise you will be sorry if you try to use this as anything other than an extension!
 
-psql:test/temp_load.not_sql:627: WARNING:  I promise you will be sorry if you try to use this as anything other than an extension!
+psql:test/temp_load.not_sql:631: WARNING:  I promise you will be sorry if you try to use this as anything other than an extension!
 
 
 

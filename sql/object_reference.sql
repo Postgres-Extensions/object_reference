@@ -522,7 +522,12 @@ SELECT __object_reference.create_function(
   , $body$
 SELECT cat_tools.objects__shared()
   || cat_tools.objects__address_unsupported()
-  || '{event trigger}'
+  /*
+   * pg_get_object_address() doesn't recognize "partitioned table" or
+   * "partitioned index" (only the base "table"/"index" types it derives
+   * from), so object identity tracking can't round-trip them.
+   */
+  || '{event trigger, partitioned table, partitioned index}'
 $body$
   , 'Returns array of object types that are not supported.'
   , 'object_reference__usage'
@@ -571,8 +576,7 @@ foreign table, foreign table column, aggregate, collation, conversion, language,
 large object, operator, operator class, operator family, operator of access method,
 function of access method, rule, text search parser, text search dictionary,
 text search template, text search configuration, foreign-data wrapper, server,
-user mapping, default acl, transform, access method, extension, policy,
-partitioned table, partitioned index
+user mapping, default acl, transform, access method, extension, policy
 }'::cat_tools.object_type[]
 $body$
   , 'Returns array of object types that have not been tested.'
