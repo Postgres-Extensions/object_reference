@@ -129,6 +129,11 @@ jobs:
         run: pg-start ${{ matrix.pg }}
       - name: Check out the repo
         uses: actions/checkout@v4
+      # pgxntool's test-build feature (test/build/zzz_build.sql) syncs
+      # test/build/*.sql into test/build/sql/ via rsync (run-test-build.sh),
+      # which the pgxn/pgxn-tools image doesn't ship.
+      - name: Install rsync
+        run: apt-get install -y rsync
       - name: Test on PostgreSQL ${{ matrix.pg }}
         # `make test` alone never fails this step: pgxntool/base.mk (as
         # vendored here, 2.2.0) marks its underlying installcheck .IGNORE,
