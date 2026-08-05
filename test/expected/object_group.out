@@ -1,5 +1,5 @@
 \set ECHO none
-1..24
+1..29
 ok 1 - Register test table 1
 ok 2 - object_group__create(...) for group name that is too long throws error
 ok 3 - object_group__create('object reference test group')
@@ -24,6 +24,9 @@ ok 21 - object_group__object__add(...)for missing group throws error
 ok 22 - Removing group with items in it fails
 ok 23 - __object__remove() for col1 works
 ok 24 - __object__remove() for test_table_2 works
-ok 25 - Removing empty group works
-# Looks like you planned 24 tests but ran 25
+ok 25 - Add test table back to group for cleanup test
+ok 26 - Object exists before cleanup test
+ok 27 - Remove from group triggers automatic cleanup attempt
+ok 28 - Object was automatically cleaned up after group removal
+ok 29 - Removing empty group works
 # TRANSACTION INTENTIONALLY LEFT OPEN!

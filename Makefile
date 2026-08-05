@@ -3,7 +3,7 @@ include pgxntool/base.mk
 testdeps: $(wildcard test/*.sql test/helpers/*.sql) # Be careful not to include directories in this
 testdeps: test_factory
 
-install: cat_tools count_nulls
+install: cat_tools
 
 # pgxntool's check-stale-expected target (added in pgxntool 2.2.0) depends on
 # installcheck but is listed before install in TEST_DEPS, and Make evaluates a
@@ -34,11 +34,6 @@ $(DESTDIR)$(datadir)/extension/cat_tools.control:
 	git clone --branch $(CAT_TOOLS_VERSION) --depth 1 https://github.com/Postgres-Extensions/cat_tools.git $(CAT_TOOLS_BUILD_DIR)
 	$(MAKE) -C $(CAT_TOOLS_BUILD_DIR) install PG_CONFIG=$(PG_CONFIG) DESTDIR=$(DESTDIR)
 	rm -rf $(CAT_TOOLS_BUILD_DIR)
-
-.PHONY: count_nulls
-count_nulls: $(DESTDIR)$(datadir)/extension/count_nulls.control
-$(DESTDIR)$(datadir)/extension/count_nulls.control:
-	pgxn install --unstable count_nulls
 
 .PHONY: test_factory
 test_factory: $(DESTDIR)$(datadir)/extension/test_factory.control
