@@ -270,6 +270,22 @@ jobs:
   # version through any step of the climb), then binary-pg_upgrades one
   # major at a time through the rest of the range, running the full suite
   # (existing mode) and re-proving the dependency guard after EVERY step.
+  #
+  # KNOWN FAILING as of PR #19: the very first climb step (12 -> 13) already
+  # fails restoring the new cluster's schema --
+  # `REFRESH MATERIALIZED VIEW "_object_reference"."_sentry_mv"` errors
+  # `pg_class heap OID value not set when in binary upgrade mode`. Confirmed
+  # general (reproduced with a bare non-extension materialized view against
+  # a scratch cluster started with postgres's own `-b` flag, no extension
+  # involved) -- a REFRESH creates a new heap, and nothing pre-assigns it a
+  # binary-upgrade OID the way pg_dump's own generated CREATE MATERIALIZED
+  # VIEW ... WITH NO DATA statements do, so pg_extension_config_dump() on a
+  # materialized view cannot survive binary pg_upgrade. _sentry_mv is marked
+  # that way deliberately (it forces object_reference.post_restore()'s
+  # OID-repair logic to re-run on any restore that doesn't itself re-run
+  # CREATE EXTENSION), so fixing this needs a maintainer decision on how to
+  # preserve that guarantee some other way -- see PR #19 for the fix
+  # directions considered so far.
   pg-upgrade-stepwise:
     # Gated behind test, not just changes -- see extension-update-test's
     # needs comment above: every leg here would fail anyway against an
