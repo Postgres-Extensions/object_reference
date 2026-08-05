@@ -1,3 +1,55 @@
+# ===========================================================================
+# Test strategy
+#
+# An object_reference install can be arrived at more than one way, each of
+# which can break differently, so each is exercised by its own job below:
+#
+#   - `lint`: the cheapest possible check (no database, no container beyond
+#     a plain checkout, seconds to run) -- gates everything else so a broken
+#     style baseline never ties up runner slots on the heavier jobs below.
+#
+#   - `changes`: cheap docs-only gate, PLUS the single source of truth for
+#     the supported-PostgreSQL-major list every other job's matrix derives
+#     from (see its own "Derive ..." step).
+#
+#   - `test`: FRESH install (CREATE EXTENSION at the current "stable"
+#     version) via `make test`, on every supported PostgreSQL major. The
+#     baseline a brand-new user gets.
+#
+#   - `extension-update-test`: UPDATE TO CURRENT. Installs the one real
+#     historical PGXN release (0.1.0), ALTER EXTENSION UPDATEs it to
+#     "stable" via bin/test_existing's update-scenario, structurally
+#     compares the result against a fresh "stable" install
+#     (bin/structural_diff -- so a divergent function/view body produced
+#     only by the update path, and never by a fresh install, cannot slip
+#     through silently), then runs the full pgTAP suite against that real
+#     updated database in `existing` mode (TEST_LOAD_SOURCE=existing,
+#     --use-existing). A planted dependency guard (a view hard-referencing
+#     _object_reference.object's row type) blocks a stray non-CASCADE DROP
+#     EXTENSION throughout, and is re-proved present after every step -- see
+#     bin/test_existing's own header for the full rationale. Runs on a
+#     SINGLE PostgreSQL major (the newest supported), not the full matrix:
+#     0.1.0's install script has no identified PostgreSQL-version floor (no
+#     SELECT * over a system catalog, no ALTER TYPE ... ADD VALUE), so
+#     crossing this axis against every major would just multiply job count
+#     for no added coverage.
+#
+#   - No binary pg_upgrade job (the cat_tools reference this effort is
+#     modeled on has `pg-upgrade-test` / `pg-upgrade-stepwise`) exists yet.
+#     Deliberate, not an oversight: that job exists to catch a view/function
+#     that breaks across a PostgreSQL major specifically because it touches
+#     catalog internals (SELECT * over a system catalog whose columns get
+#     added/exposed/removed between majors). object_reference has no such
+#     construct in either its current or 0.1.0 install script (checked
+#     directly -- no view or function selects * from a system catalog; every
+#     object_reference table/view is an ordinary user object), so the risk
+#     that job protects against is correspondingly low here. Left as
+#     explicitly-noted future work rather than built preemptively; revisit
+#     if/when object_reference grows a catalog-touching view or function.
+#
+#   - `all-checks-passed`: single stable required-status-check name; see its
+#     own comment below.
+# ===========================================================================
 name: CI
 on:
   push:
@@ -144,6 +196,41 @@ jobs:
         # suite's pgTAP-based tests) and exits non-zero on failure.
         run: make verify-results
 
+  # Extension UPDATE path: install the one real historical PGXN release
+  # (0.1.0), ALTER EXTENSION UPDATE to the current version ("stable"), and
+  # run the full suite against the real updated database in `existing` mode
+  # -- see the "Test strategy" comment at the top of this file and
+  # bin/test_existing's own header for the full flow and dependency-guard
+  # rationale.
+  extension-update-test:
+    # Gated behind test (not just changes): this job installs a second,
+    # older extension version and runs the update path, which is wasted
+    # effort against a baseline that's already broken by a failing
+    # fresh-install test. success() must be written explicitly -- GitHub
+    # only assumes success() as a job's default when it has no if: at all.
+    needs: [changes, test]
+    if: success() && needs.changes.outputs.docs_only != 'true'
+    name: ⬆️ Extension update test (0.1.0 → stable)
+    runs-on: ubuntu-latest
+    container: pgxn/pgxn-tools
+    steps:
+      # A single PostgreSQL major (the newest supported, from the `changes`
+      # job's single source of truth) -- see the Test strategy comment at
+      # the top of this file for why this isn't crossed against the full PG
+      # matrix.
+      - name: Start PostgreSQL ${{ fromJSON(needs.changes.outputs.supported_pg)[0] }}
+        run: pg-start ${{ fromJSON(needs.changes.outputs.supported_pg)[0] }}
+      - name: Check out the repo
+        uses: actions/checkout@v4
+      - name: Install object_reference + its 0.1.0-only test dependency (count_nulls)
+        # TEST_LOAD_SOURCE=update activates the Makefile's conditional
+        # `install: count_nulls` prerequisite (see the Makefile's own
+        # comment on it): 0.1.0's install script needs count_nulls even
+        # though current object_reference.control no longer declares it.
+        run: make install TEST_LOAD_SOURCE=update
+      - name: Update 0.1.0 -> stable, structurally compare, run the suite (existing mode)
+        run: bin/test_existing update-scenario object_reference_update 0.1.0
+
   # A single stable check name for use as a required status check in branch
   # protection rules. Matrix jobs produce check names like "🐘 PostgreSQL 14"
   # which would all need to be listed individually and updated whenever the
@@ -151,7 +238,7 @@ jobs:
   # (e.g. test, on a docs-only push), and fails if any failed or were
   # cancelled.
   all-checks-passed:
-    needs: [changes, lint, test]
+    needs: [changes, lint, test, extension-update-test]
     if: always()
     runs-on: ubuntu-latest
     steps:
