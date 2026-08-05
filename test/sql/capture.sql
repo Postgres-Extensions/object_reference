@@ -49,6 +49,7 @@ SELECT plan( (
     + cna * 2 -- Drop objects
     + 1 -- Verify object_group_ids still has correct count
     + 1 -- verify object table is now empty
+    + 1 -- schema-qualification (search_path)
 )::int )
   FROM (SELECT count(*) c, count(CASE WHEN create_command NOT LIKE 'ALTER%' THEN 1 END) AS cna
     FROM test_object) c
@@ -234,6 +235,6 @@ SELECT is_empty(
   , 'No object references remain'
 );
 
-\i test/pgxntool/finish.sql
+\i test/finish.sql
 
 -- vi: expandtab sw=2 ts=2
