@@ -2,10 +2,11 @@
 #
 # Modeled on cat_tools's bin/test_existing (Postgres-Extensions/cat_tools) --
 # exercises the object_reference test suite against a REAL database whose
-# extension was installed/updated OUTSIDE the suite ("existing" mode). The
-# extension-update-test CI job repeats the same sequence:
+# extension was installed/updated/pg_upgraded OUTSIDE the suite ("existing"
+# mode). Both the extension-update-test and pg-upgrade-stepwise CI jobs repeat
+# the same sequence:
 #
-#   install -> plant dependency guard -> update -> assert version
+#   install -> plant dependency guard -> update/upgrade -> assert version
 #            -> run the suite in existing mode
 #
 # so it lives here once instead of duplicated inline YAML. Not CI-only: a
@@ -21,14 +22,18 @@
 #       ALTER EXTENSION object_reference UPDATE [TO 'TO_VERSION'] (empty =>
 #       the current default_version, "stable").
 #
+#   prepare-old DB [INSTALL_VERSION]
+#       Old-cluster prep for pg-upgrade-stepwise: create DB + extension at
+#       INSTALL_VERSION (default 0.1.0), then plant + prove the guard.
+#
 #   run-suite DB
 #       Run the suite in existing mode (extension must be at the current
 #       version).
 #
 #   update-scenario DB FROM_VERSION
-#       Create DB + extension at FROM_VERSION (bringing in count_nulls, the
-#       0.1.0-only dependency object_reference.control no longer declares),
-#       plant + prove the guard, update to the current version, structurally
+#       Create DB + extension at FROM_VERSION (via prepare-old, which brings
+#       in count_nulls, the 0.1.0-only dependency object_reference.control no
+#       longer declares), update to the current version, structurally
 #       compare the result against a fresh install of the current version
 #       (see diff-fresh), then run the suite against that real updated
 #       database.
@@ -42,14 +47,14 @@
 #
 # object_reference has only ONE real historical PGXN release (0.1.0) and only
 # ONE update script (0.1.0--stable.sql, a direct hop with no already-tagged
-# intermediate landing version), so cat_tools's prepare-old / update-check /
-# update-check-version subcommands don't apply here:
-#   - prepare-old exists to bridge an old, pg_upgrade-unsafe version to a
-#     safe one before a binary pg_upgrade leg. No pg_upgrade CI job exists yet
-#     for object_reference (see the containing PR description for that
-#     decision), and 0.1.0 has no identified pg_upgrade-unsafe construct (no
-#     SELECT * over a system catalog in any view -- checked directly), so
-#     there is nothing to bridge.
+# intermediate landing version), so cat_tools's update-check /
+# update-check-version subcommands don't apply here, and prepare-old is
+# simpler than cat_tools's own (no BRIDGE_TO parameter):
+#   - cat_tools's prepare-old bridges an old, pg_upgrade-unsafe version to a
+#     known-safe one before a binary pg_upgrade leg. 0.1.0 has no identified
+#     pg_upgrade-unsafe construct (no SELECT * over a system catalog in any
+#     view -- checked directly), so pg-upgrade-stepwise installs it directly
+#     and there is nothing to bridge before the climb starts.
 #   - update-check / update-check-version exist to assert an update script
 #     applying to an ALREADY-TAGGED intermediate version, where full
 #     fresh-vs-update parity is known to be permanently unattainable (the
@@ -226,12 +231,19 @@ assert_matches_fresh() {
 # Subcommand implementations
 # ---------------------------------------------------------------------------
 
-# update-scenario DB FROM_VERSION
-#   Full extension-update flow that runs the existing-mode suite: create the
-#   DB and extension at FROM_VERSION, plant + prove the guard, update to the
-#   current version, then run the suite against that real updated database.
-update_scenario() {
-  local db=$1 from=$2
+# prepare-old DB [INSTALL_VERSION]
+#   Old-cluster preparation shared by update-scenario and the pg-upgrade-
+#   stepwise CI job: create the DB and the extension at INSTALL_VERSION
+#   (default 0.1.0, the one real historical PGXN release), then plant + prove
+#   the dependency guard. No BRIDGE_TO parameter (unlike cat_tools's own
+#   prepare-old, which updates the old cluster to a known pg_upgrade-safe
+#   version before a binary pg_upgrade runs): 0.1.0's install script has no
+#   identified pg_upgrade-unsafe construct (no SELECT * over a system
+#   catalog in any view), so there is nothing to bridge before a binary
+#   pg_upgrade -- updating all the way to the current version, whenever
+#   that's wanted, is a separate `update` call after this one.
+prepare_old() {
+  local db=$1 install=${2:-0.1.0}
   createdb "$db"
   # 0.1.0's own install script creates a trigger that calls count_nulls'
   # not_null_count_trigger() -- a dependency object_reference.control no
@@ -243,8 +255,18 @@ update_scenario() {
   # Makefile's conditional `install: count_nulls` prerequisite,
   # TEST_LOAD_SOURCE=update only, handles that -- see the CI job).
   psql_do "$db" -c "CREATE EXTENSION IF NOT EXISTS count_nulls"
-  psql_do "$db" -c "CREATE EXTENSION object_reference VERSION '$from' CASCADE"
+  psql_do "$db" -c "CREATE EXTENSION object_reference VERSION '$install' CASCADE"
   plant_guard "$db"
+}
+
+# update-scenario DB FROM_VERSION
+#   Full extension-update flow that runs the existing-mode suite: create the
+#   DB and extension at FROM_VERSION (via prepare-old), update to the
+#   current version, structurally compare against a fresh install, then run
+#   the suite against that real updated database.
+update_scenario() {
+  local db=$1 from=$2
+  prepare_old "$db" "$from"
   update_ext "$db"
   assert_matches_fresh "$db" "$(current_version)"
   run_suite "$db"
@@ -289,6 +311,7 @@ usage() {
   echo "usage: bin/test_existing <subcommand> [args]" >&2
   echo "  plant-guard DB" >&2
   echo "  update DB [TO_VERSION]" >&2
+  echo "  prepare-old DB [INSTALL_VERSION]" >&2
   echo "  run-suite DB" >&2
   echo "  update-scenario DB FROM_VERSION" >&2
   echo "  diff-fresh DB VERSION" >&2
@@ -304,6 +327,7 @@ main() {
   case "$cmd" in
     plant-guard)      plant_guard "$@" ;;
     update)           update_ext "$@" ;;
+    prepare-old)      prepare_old "$@" ;;
     run-suite)        run_suite "$@" ;;
     update-scenario)  update_scenario "$@" ;;
     diff-fresh)       assert_matches_fresh "$@" ;;
