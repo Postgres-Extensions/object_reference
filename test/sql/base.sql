@@ -11,6 +11,7 @@ SELECT plan(
   +2 -- new functions
   +3 -- errors (includes temp object test)
   +1 -- create extensions
+  +1 -- schema-qualification (search_path)
 );
 
 -- Schema
@@ -79,6 +80,6 @@ SELECT lives_ok(
   , $$CREATE EXTENSION test_factory$$
 );
   
-\i test/pgxntool/finish.sql
+\i test/finish.sql
 
 -- vi: expandtab sw=2 ts=2
