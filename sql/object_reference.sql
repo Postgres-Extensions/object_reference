@@ -2,18 +2,7 @@
 \echo You really, REALLY do NOT want to try and load this via psql!!!
 \echo It will FAIL during pg_dump! \quit
 
--- This BS is because count_nulls is relocatable, so could be in any schema
-DO $$
-BEGIN
-  RAISE DEBUG 'initial search_path = %', current_setting('search_path');
-  PERFORM set_config('search_path', current_setting('search_path') || ', ' || extnamespace::regnamespace::text, true) -- true = local only
-    FROM pg_extension
-    WHERE extname = 'count_nulls'
-  ;
-  RAISE DEBUG 'search_path changed to %', current_setting('search_path');
-END
-$$;
-/* EXCLUDED CODE: schema-restriction check below not currently enforced
+/*
 DO $$
 DECLARE
   c_schema CONSTANT name := (SELECT extnamespace::regnamespace::text FROM pg_extension WHERE extname = 'cat_tools');
@@ -191,7 +180,7 @@ GRANT REFERENCES ON _object_reference.object TO object_reference__dependency;
 
 CREATE TABLE _object_reference._object_oid(
   object_id       int                     PRIMARY KEY REFERENCES _object_reference.object ON DELETE CASCADE ON UPDATE CASCADE
-  , classid       regclass                NOT NULL
+  , classid       oid                     NOT NULL
   /* EXCLUDED CODE: TODO: needs to be a trigger
     CONSTRAINT classid_must_match__object__address_classid
       CHECK( classid IS NOT DISTINCT FROM cat_tools.object__address_classid(object_type) )
@@ -199,50 +188,11 @@ CREATE TABLE _object_reference._object_oid(
   , objid         oid                     NOT NULL
   , objsubid      int                     NOT NULL
     CONSTRAINT objid_must_match CHECK( -- _object_reference._sanity() depends on this!
-      objid IS NOT DISTINCT FROM coalesce(
-        regclass::oid -- Need to cast first item to generic OID
-        , regconfig
-        , regdictionary
-        , regnamespace -- SED: REQUIRES 9.5!
-        , regoperator
-        , regprocedure
-        , regtype
-        , object_oid
-      )
+      objid IS NOT DISTINCT FROM object_oid
     )
   , CONSTRAINT object__u_classid__objid__objsubid UNIQUE( classid, objid, objsubid )
-  , regclass      regclass
-    CONSTRAINT regclass_classid CHECK( regclass IS NULL OR classid = cat_tools.object__reg_type_catalog('regclass') )
-  , regconfig     regconfig
-    CONSTRAINT regconfig_classid CHECK( regconfig IS NULL OR classid = cat_tools.object__reg_type_catalog('regconfig') )
-  , regdictionary regdictionary
-    CONSTRAINT regdictionary_classid CHECK( regdictionary IS NULL OR classid = cat_tools.object__reg_type_catalog('regdictionary') )
-  , regnamespace  regnamespace -- SED: REQUIRES 9.5!
-    CONSTRAINT regnamespace_classid CHECK( regnamespace IS NULL OR classid = cat_tools.object__reg_type_catalog('regnamespace') ) -- SED: REQUIRES 9.5!
-  , regoperator   regoperator
-    CONSTRAINT regoperator_classid CHECK( regoperator IS NULL OR classid = cat_tools.object__reg_type_catalog('regoperator') )
-  , regprocedure  regprocedure
-    CONSTRAINT regprocedure_classid CHECK( regprocedure IS NULL OR classid = cat_tools.object__reg_type_catalog('regprocedure') )
-  -- I don't think we should ever have regrole since we can't create event triggers on it
---  , regrole       regrole
-  , regtype       regtype
-    CONSTRAINT regtype_classid CHECK( regtype IS NULL OR classid = cat_tools.object__reg_type_catalog('regtype') )
-  , object_oid    oid
+  , object_oid    oid                     NOT NULL
 );
-CREATE TRIGGER null_count
-  AFTER INSERT OR UPDATE
-  ON _object_reference._object_oid
-  FOR EACH ROW EXECUTE PROCEDURE not_null_count_trigger(
-    5 -- First 4 fields, + 1
-    , 'only one object reference field may be set'
-  )
-;
-CREATE UNIQUE INDEX _object_oid__u_regclass ON _object_reference._object_oid(regclass) WHERE regclass IS NOT NULL;
-CREATE UNIQUE INDEX _object_oid__u_regconfig ON _object_reference._object_oid(regconfig) WHERE regconfig IS NOT NULL;
-CREATE UNIQUE INDEX _object_oid__u_regdictionary ON _object_reference._object_oid(regdictionary) WHERE regdictionary IS NOT NULL;
-CREATE UNIQUE INDEX _object_oid__u_regoperator ON _object_reference._object_oid(regoperator) WHERE regoperator IS NOT NULL;
-CREATE UNIQUE INDEX _object_oid__u_regprocedure ON _object_reference._object_oid(regprocedure) WHERE regprocedure IS NOT NULL;
-CREATE UNIQUE INDEX _object_oid__u_regtype ON _object_reference._object_oid(regtype) WHERE regtype IS NOT NULL;
 
 SELECT __object_reference.create_function(
   '_object_reference._sanity'
@@ -302,13 +252,6 @@ CREATE VIEW _object_reference._object_v AS
       , i.classid
       , i.objid
       , i.objsubid
-      , i.regclass
-      , i.regconfig
-      , i.regdictionary
-      , i.regnamespace
-      , i.regoperator
-      , i.regprocedure
-      , i.regtype
       , i.object_oid
       , s.*
     FROM _object_reference.object o
@@ -324,13 +267,6 @@ CREATE VIEW _object_reference._object_v__for_update AS
       , i.classid
       , i.objid
       , i.objsubid
-      , i.regclass
-      , i.regconfig
-      , i.regdictionary
-      , i.regnamespace
-      , i.regoperator
-      , i.regprocedure
-      , i.regtype
       , i.object_oid
       , s.*
     FROM _object_reference.object o
@@ -362,26 +298,9 @@ BEGIN
       WHERE o.object_id = _object_oid__add.object_id
     ;
   END IF;
-  DECLARE
-    c_reg_type name := cat_tools.object__reg_type(object_type); -- Verifies regtype is supported, if there is one
-    c_oid_field CONSTANT name := coalesce(c_reg_type, 'object_oid');
-
-    c_oid_insert CONSTANT text := format(
-      --USING object_id, classid, objid, objsubid
-        $$INSERT INTO _object_reference._object_oid(object_id, classid, objid, objsubid, %I)
-            SELECT $1, $2, $3, $4, $3::%I$$
-        , c_oid_field
-        , coalesce(c_reg_type, 'oid')
-      )
-    ;
   BEGIN
-    RAISE DEBUG E'%\n    USING  %, %, %, %'
-      , c_oid_insert
-      , object_id, classid, objid, objsubid
-    ;
-    EXECUTE c_oid_insert
-      USING object_id, classid, objid, objsubid
-    ;
+    INSERT INTO _object_reference._object_oid(object_id, classid, objid, objsubid, object_oid)
+      VALUES (object_id, classid, objid, objsubid, objid);
 
     SELECT INTO STRICT r_object_v -- Record better exist!
         *
@@ -631,6 +550,24 @@ CREATE TABLE _object_reference.object_group__object(
 );
 SELECT __object_reference.safe_dump('_object_reference.object_group__object');
 
+-- Trigger function for automatic object cleanup
+SELECT __object_reference.create_function(
+  '_object_reference._object_group__object__cleanup_trigger'
+  , ''
+  , 'trigger LANGUAGE plpgsql'
+  , $body$
+BEGIN
+  PERFORM object_reference.object__cleanup(OLD.object_id);
+  RETURN OLD;
+END
+$body$
+  , 'Trigger function to automatically attempt cleanup of objects when removed from groups.'
+);
+CREATE TRIGGER object_group__object__cleanup
+  AFTER DELETE ON _object_reference.object_group__object
+  FOR EACH ROW
+  EXECUTE FUNCTION _object_reference._object_group__object__cleanup_trigger();
+
 -- __get
 SELECT __object_reference.create_function(
   'object_reference.object_group__get'
@@ -836,6 +773,69 @@ $body$
 );
 
 /*
+ * OBJECT INFO FUNCTIONS
+ */
+SELECT __object_reference.create_function(
+  'object_reference.object__describe'
+  , $args$
+  object_id int
+$args$
+  , 'text LANGUAGE sql'
+  , $body$
+SELECT pg_catalog.pg_describe_object(
+  o.classid
+  , o.objid
+  , o.objsubid
+)
+FROM _object_reference._object_oid o
+WHERE o.object_id = $1
+$body$
+  , 'Return a human-readable description of the object, matching pg_describe_object() format.'
+  , 'object_reference__usage'
+);
+
+SELECT __object_reference.create_function(
+  'object_reference.object__identity'
+  , $args$
+  object_id int
+  , OUT type text
+  , OUT schema text
+  , OUT name text
+  , OUT identity text
+$args$
+  , 'record LANGUAGE sql'
+  , $body$
+SELECT
+  i.type::text
+  , i.schema::text
+  , i.name::text
+  , i.identity::text
+FROM _object_reference._object_oid o
+  , LATERAL pg_catalog.pg_identify_object(o.classid, o.objid, o.objsubid) i
+WHERE o.object_id = $1
+$body$
+  , 'Return object identification information matching pg_identify_object() format.'
+  , 'object_reference__usage'
+);
+SELECT __object_reference.create_function(
+  'object_reference.object__cleanup'
+  , $args$
+  object_id int
+$args$
+  , 'void LANGUAGE plpgsql'
+  , $body$
+BEGIN
+  DELETE FROM _object_reference.object WHERE object.object_id = object__cleanup.object_id;
+EXCEPTION WHEN foreign_key_violation THEN
+  -- Object is still referenced elsewhere, ignore the error
+  NULL;
+END
+$body$
+  , 'Attempts to delete an object from the tracking system. Silently returns if the object is still referenced by other tables.'
+  , 'object_reference__usage'
+);
+
+/*
  * OBJECT GETSERT
  */
 SELECT __object_reference.create_function(
@@ -854,6 +854,7 @@ DECLARE
 
   r_object_v _object_reference._object_v;
   r_address record;
+  r_identity record;
 
   did_insert boolean := false;
 
@@ -879,6 +880,15 @@ BEGIN
         , objid
         , objsubid
       )
+    ;
+  END IF;
+
+  -- Refuse to track objects in temporary schemas
+  SELECT INTO r_identity * FROM pg_catalog.pg_identify_object(c_classid, objid, objsubid);
+  IF r_identity.schema IS NOT NULL AND (r_identity.schema LIKE 'pg_temp%' OR r_identity.schema LIKE 'pg_toast_temp%') THEN
+    RAISE 'cannot track temporary object'
+      USING DETAIL = format('object %s is in temporary schema %s', r_identity.identity, r_identity.schema)
+      , ERRCODE = 'feature_not_supported'
     ;
   END IF;
 
