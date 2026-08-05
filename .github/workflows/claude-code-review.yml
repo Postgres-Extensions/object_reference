@@ -99,6 +99,15 @@ jobs:
           # marketplace repo's default branch (upstream anthropics/claude-code).
           plugin_marketplaces: 'https://github.com/anthropics/claude-code.git'
           plugins: 'code-review@claude-code-plugins'
+          # A bare `prompt:` with no @claude mention runs the action in "agent
+          # mode", which starts MCP servers based on an --allowedTools flag
+          # inside claude_args -- it does not look at the invoked plugin's own
+          # allowed-tools frontmatter. Without this, the github_inline_comment
+          # MCP server never starts, so mcp__github_inline_comment__create_inline_comment
+          # doesn't exist in the session at all, and the code-review plugin
+          # silently falls back to a single consolidated PR comment instead of
+          # real per-line inline comments (no error, no warning either way).
+          claude_args: '--allowedTools mcp__github_inline_comment__create_inline_comment'
           # --comment is required: without it, the code-review plugin only
           # prints its findings to the job log and never posts anything to
           # the PR (confirmed by capturing the hidden SDK transcript on a
