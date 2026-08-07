@@ -85,7 +85,7 @@ CREATE FUNCTION __object_reference.create_function(
   , grants text DEFAULT NULL
 ) RETURNS void LANGUAGE plpgsql AS $body$
 DECLARE
-  c_clean_args text := cat_tools.function__arg_types_text(args);
+  c_clean_args text := cat_tools.routine__parse_arg_types_text(args);
 
   create_template CONSTANT text := $template$
 CREATE OR REPLACE FUNCTION %s(
@@ -523,7 +523,12 @@ SELECT __object_reference.create_function(
   , $body$
 SELECT cat_tools.objects__shared()
   || cat_tools.objects__address_unsupported()
-  || '{event trigger}'
+  /*
+   * pg_get_object_address() doesn't recognize "partitioned table" or
+   * "partitioned index" (only the base "table"/"index" types it derives
+   * from), so object identity tracking can't round-trip them.
+   */
+  || '{event trigger, partitioned table, partitioned index}'
 $body$
   , 'Returns array of object types that are not supported.'
   , 'object_reference__usage'
