@@ -1258,11 +1258,6 @@ BEGIN
   RETURN c_next_level;
 
 EXCEPTION WHEN undefined_table THEN
-  /* EXCLUDED CODE
-  CREATE TEMP TABLE __object_reference__ddl_capture AS
-    SELECT c_next_level, capture__start.object_group_id
-  ;
-  */
   CREATE TEMP TABLE __object_reference__ddl_capture(
     capture_level int PRIMARY KEY
     , object_group_id INT NOT NULL -- temp tables can't reference permanent ones
