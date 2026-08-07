@@ -142,8 +142,15 @@ jobs:
         # which broke the action's own internal fetch ("couldn't find remote
         # ref pull/<n>/head") since that ref doesn't exist on the fork.
         # Intentionally tracks the major-version tag (not a pinned SHA) so
-        # upstream fixes are picked up automatically.
+        # upstream fixes are picked up automatically. No ref:/repository:
+        # override (see the comment above), but persist-credentials: false
+        # is still worth keeping explicitly: this job never needs to push
+        # anything, so there's no reason to leave a push-capable credential
+        # sitting in .git/config for the rest of the job to (mis)use.
         uses: actions/checkout@v7
+        with:
+          fetch-depth: 1
+          persist-credentials: false
 
       - name: Run Claude Code Review
         if: steps.gate.outputs.decision == 'run'
