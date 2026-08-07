@@ -9,11 +9,13 @@ name: Claude Code Review
 # write-capable token. The job is gated to PRs from the trusted `jnasbyupgrade`
 # fork only — an arbitrary external fork can never trigger this secret-bearing
 # job. The workflow file always comes from the base branch (master), so a PR
-# cannot modify the reviewer that runs on it. We check out the PR head only for
-# read context (persist-credentials: false) and never build or execute PR code.
+# cannot modify the reviewer that runs on it. This workflow never checks out
+# the PR's own ref into the workspace (see the checkout step below) --
+# claude-code-action fetches and reads the PR's content itself, safely, and
+# never builds or executes it.
 on:
   pull_request_target:
-    types: [opened, synchronize, reopened, ready_for_review]
+    types: [opened, synchronize, reopened, ready_for_review, labeled]
 
 concurrency:
   group: claude-review-${{ github.event.pull_request.number }}
@@ -21,11 +23,34 @@ concurrency:
 
 jobs:
   claude-review:
-    # Trusted fork only, and skip drafts (don't spend API/CI on unfinished PRs).
-    # To add more trusted owners, extend the head-owner check.
+    # !!! SECURITY-CRITICAL -- DO NOT REMOVE OR WEAKEN THE user.login CHECK
+    # BELOW !!! It is the ONLY thing standing between an arbitrary external
+    # PR and this job's write-capable GITHUB_TOKEN and CLAUDE_CODE_OAUTH_TOKEN.
+    # Drop or loosen this check and any PR can trigger a job that runs with
+    # this repo's secrets. To trust an additional person, EXTEND this
+    # condition explicitly (e.g. `|| ... == 'other-trusted-account'`) --
+    # never replace it with something broader (a wildcard, a check on a
+    # label or a comment -- those ARE attacker-controlled on their own PR,
+    # unlike `user.login`, which is GitHub's own authenticated record of who
+    # actually opened the PR and can't be spoofed by anyone else).
+    #
+    # Deliberately checks the PR AUTHOR (user.login), not
+    # head.repo.owner.login: the latter only identifies "who owns the fork"
+    # for fork-headed PRs -- for an upstream-branch-headed PR (base and head
+    # both in this repo, e.g. from `gh stack`, or `gh pr create` without a
+    # fork), it's always this repo's own org, never the actual author, so
+    # that check silently skipped review on every such PR regardless of who
+    # opened it. `user.login` works correctly for both fork-headed and
+    # upstream-branch-headed PRs.
+    #
+    # Skip drafts too (don't spend API/CI on unfinished PRs). `labeled` is
+    # only in the trigger list so the claude-debug toggle below can kick off
+    # a fresh run without a push; scope it tightly here so an unrelated
+    # label doesn't re-run this (paid) workflow.
     if: >-
       github.event.pull_request.draft == false &&
-      github.event.pull_request.head.repo.owner.login == 'jnasbyupgrade'
+      github.event.pull_request.user.login == 'jnasbyupgrade' &&
+      (github.event.action != 'labeled' || github.event.label.name == 'claude-debug')
     runs-on: ubuntu-latest
     timeout-minutes: 60
     permissions:
@@ -33,6 +58,23 @@ jobs:
       pull-requests: write   # post the review comments
       checks: read           # read sibling check-runs for the cost gate
     steps:
+      # Live-query the claude-debug label rather than trusting
+      # github.event.pull_request.labels (the event payload captured at
+      # trigger time): GitHub's "Re-run jobs" replays that ORIGINAL stored
+      # payload, so a payload-based check would miss a label added after a
+      # run already started. A live `gh pr view` call always reflects the
+      # PR's current labels, whether this is a fresh trigger or a re-run.
+      - name: Check for claude-debug label (live)
+        id: debug_label
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          PR: ${{ github.event.pull_request.number }}
+        run: |
+          debug=$(gh pr view "$PR" --repo "$REPO" --json labels --jq 'any(.labels[]; .name == "claude-debug")')
+          echo "debug=$debug" >> "$GITHUB_OUTPUT"
+          echo "claude-debug label present: $debug"
+
       # COST GATE: the paid Claude review is the last thing to run. Wait for the
       # PR head's OTHER check-runs to finish and only proceed if they are clean.
       # If any sibling check failed we skip the review to avoid spending money
@@ -41,7 +83,9 @@ jobs:
       #   - decision=run  : all sibling checks completed with a good conclusion,
       #                     OR no sibling checks exist after a short grace window
       #                     (nothing to gate on), OR the poll timed out is treated
-      #                     as skip (see below).
+      #                     as skip (see below), OR the claude-debug label is
+      #                     present (skip the wait entirely for fast debug
+      #                     iteration; see the live-query step above).
       #   - decision=skip : at least one sibling check failed/cancelled/etc, or
       #                     we timed out waiting for still-pending checks.
       # We exclude this workflow's own check-run (job name `claude-review`) so the
@@ -52,7 +96,13 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           REPO: ${{ github.repository }}
           SHA: ${{ github.event.pull_request.head.sha }}
+          DEBUG_LABEL: ${{ steps.debug_label.outputs.debug }}
         run: |
+          if [ "$DEBUG_LABEL" = "true" ]; then
+            echo "claude-debug label present — skipping cost gate wait"
+            echo "decision=run" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
           decision=skip
           for i in $(seq 1 72); do   # ~24 min max
             json=$(gh api "repos/$REPO/commits/$SHA/check-runs" --paginate \
@@ -74,14 +124,31 @@ jobs:
           echo "decision=$decision" >> "$GITHUB_OUTPUT"
           echo "gate decision: $decision"
 
-      - name: Check out PR head (read-only context)
+      - name: Check out base branch
         if: steps.gate.outputs.decision == 'run'
+        # Deliberately NO ref:/repository: override -- this checks out this
+        # repo's own base branch (master), not the PR's fork/ref. Checking
+        # out an untrusted PR ref into the workspace root before this action
+        # is exactly the anti-pattern anthropics/claude-code-action's own
+        # docs/security.md warns against; its "preferred" pattern is a plain
+        # checkout of the base ref, nothing more. claude-code-action fetches
+        # and reviews the PR's actual content itself, from ITS OWN internal
+        # logic (see its src/github/operations/branch.ts): for a fork PR it
+        # fetches origin's refs/pull/<n>/head -- a ref GitHub maintains on
+        # THIS repo for any PR, fork or not, so it never needs direct access
+        # to the fork's own remote at all. That's why this step must leave
+        # `origin` pointing at this repo (the default) rather than being
+        # redirected to the fork: an earlier version of this step did that,
+        # which broke the action's own internal fetch ("couldn't find remote
+        # ref pull/<n>/head") since that ref doesn't exist on the fork.
         # Intentionally tracks the major-version tag (not a pinned SHA) so
-        # upstream fixes are picked up automatically.
-        uses: actions/checkout@v4
+        # upstream fixes are picked up automatically. No ref:/repository:
+        # override (see the comment above), but persist-credentials: false
+        # is still worth keeping explicitly: this job never needs to push
+        # anything, so there's no reason to leave a push-capable credential
+        # sitting in .git/config for the rest of the job to (mis)use.
+        uses: actions/checkout@v7
         with:
-          repository: ${{ github.event.pull_request.head.repo.full_name }}
-          ref: ${{ github.event.pull_request.head.sha }}
           fetch-depth: 1
           persist-credentials: false
 
@@ -95,10 +162,34 @@ jobs:
           # pull_request_target. GITHUB_TOKEN is repo/workflow-scoped (independent
           # of the actor's role) and has pull-requests: write here.
           github_token: ${{ secrets.GITHUB_TOKEN }}
+          # Post (and keep updating) a live tracking-comment checklist as
+          # Claude works, instead of staying silent until the whole run
+          # finishes — without this, the cost gate above plus the review
+          # itself can leave a PR with zero visible progress for the better
+          # part of an hour. Disabled specifically for `labeled`-triggered
+          # runs: the action's own track_progress validation only accepts
+          # opened/synchronize/reopened/ready_for_review for pull_request(_target)
+          # events and throws for any other action, and `labeled` is exactly
+          # how the claude-debug toggle re-triggers this workflow.
+          track_progress: ${{ github.event.action != 'labeled' }}
           # NOTE: plugin_marketplaces can't be pinned — it tracks the
           # marketplace repo's default branch (upstream anthropics/claude-code).
           plugin_marketplaces: 'https://github.com/anthropics/claude-code.git'
           plugins: 'code-review@claude-code-plugins'
+          # claude-debug label (live-queried above) turns on the raw JSON
+          # transcript for debugging. Normally off: it can include tool
+          # execution results, which shouldn't be publicly visible in Actions
+          # logs.
+          show_full_output: ${{ steps.debug_label.outputs.debug == 'true' }}
+          # A bare `prompt:` with no @claude mention runs the action in "agent
+          # mode", which starts MCP servers based on an --allowedTools flag
+          # inside claude_args -- it does not look at the invoked plugin's own
+          # allowed-tools frontmatter. Without this, the github_inline_comment
+          # MCP server never starts, so mcp__github_inline_comment__create_inline_comment
+          # doesn't exist in the session at all, and the code-review plugin
+          # silently falls back to a single consolidated PR comment instead of
+          # real per-line inline comments (no error, no warning either way).
+          claude_args: '--allowedTools mcp__github_inline_comment__create_inline_comment'
           # --comment is required: without it, the code-review plugin only
           # prints its findings to the job log and never posts anything to
           # the PR (confirmed by capturing the hidden SDK transcript on a
