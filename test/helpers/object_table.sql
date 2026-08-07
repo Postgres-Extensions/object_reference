@@ -143,24 +143,24 @@ INSERT INTO test_prereq VALUES
 , ($$CREATE FUNCTION "test type out"("test type") RETURNS cstring LANGUAGE 'internal' IMMUTABLE AS 'int2in'$$)
 ;
 
--- \N is null character
-COPY test_object(object_type, object_name, secondary, create_command, drop_command) FROM STDIN (DELIMITER '|');
-table|test table||%("test column" int)|
-index|test table test index||%ON "test table"("test column")|
-sequence|test sequence|||
-view|test view||%AS SELECT * FROM "test table"|
-materialized view|test materialized view||%AS SELECT * FROM "test table"|
-table column|test table|second test column|ALTER TABLE "test table" ADD COLUMN "second test column" int|ALTER TABLE "test table" DROP COLUMN "second test column"
-domain constraint|test domain|test domain constraint|ALTER DOMAIN "test domain" ADD CONSTRAINT "test domain constraint" CHECK(true)|ALTER DOMAIN "test domain" DROP CONSTRAINT "test domain constraint"
-table constraint|test table|test table constraint|ALTER TABLE "test table" ADD CONSTRAINT "test table constraint" CHECK(true)|ALTER TABLE "test table" DROP CONSTRAINT "test table constraint"
-function|test function|"test column" int DEFAULT 0|CREATE FUNCTION "test function"("test column" int DEFAULT 0) RETURNS int LANGUAGE sql AS 'SELECT $1'|DROP FUNCTION "test function"(int)
-type|test type||CREATE TYPE "test type" (INPUT = "test type in", OUTPUT = "test type out")|DROP TYPE "test type" CASCADE; -- Need to cascade due to functions
-cast|test type|integer|CREATE CAST ("test type" AS int4) WITH INOUT|DROP CAST ("test type" AS int4)
-default value|test table|test column|ALTER TABLE "test table" ALTER "test column" SET DEFAULT 0|ALTER TABLE "test table" ALTER "test column" DROP DEFAULT
-trigger|test table|test trigger|CREATE TRIGGER "test trigger" AFTER INSERT ON "test table" FOR EACH ROW EXECUTE PROCEDURE tg_null()|DROP TRIGGER "test trigger" ON "test table"
-\.
+INSERT INTO test_object(object_type, object_name, secondary, create_command, drop_command) VALUES
+('table', 'test table', '', '%("test column" int)', '')
+, ('index', 'test table test index', '', '%ON "test table"("test column")', '')
+, ('sequence', 'test sequence', '', '', '')
+, ('view', 'test view', '', '%AS SELECT * FROM "test table"', '')
+, ('materialized view', 'test materialized view', '', '%AS SELECT * FROM "test table"', '')
+, ('table column', 'test table', 'second test column', 'ALTER TABLE "test table" ADD COLUMN "second test column" int', 'ALTER TABLE "test table" DROP COLUMN "second test column"')
+, ('domain constraint', 'test domain', 'test domain constraint', 'ALTER DOMAIN "test domain" ADD CONSTRAINT "test domain constraint" CHECK(true)', 'ALTER DOMAIN "test domain" DROP CONSTRAINT "test domain constraint"')
+, ('table constraint', 'test table', 'test table constraint', 'ALTER TABLE "test table" ADD CONSTRAINT "test table constraint" CHECK(true)', 'ALTER TABLE "test table" DROP CONSTRAINT "test table constraint"')
+, ('function', 'test function', '"test column" int DEFAULT 0', 'CREATE FUNCTION "test function"("test column" int DEFAULT 0) RETURNS int LANGUAGE sql AS ''SELECT $1''', 'DROP FUNCTION "test function"(int)')
+, ('type', 'test type', '', 'CREATE TYPE "test type" (INPUT = "test type in", OUTPUT = "test type out")', 'DROP TYPE "test type" CASCADE; -- Need to cascade due to functions')
+-- secondary mirrors pg_catalog's own type display name (format_type() of int4), not a style choice -- not "int" per prefer-short-type
+, ('cast', 'test type', 'integer', 'CREATE CAST ("test type" AS int4) WITH INOUT', 'DROP CAST ("test type" AS int4)')
+, ('default value', 'test table', 'test column', 'ALTER TABLE "test table" ALTER "test column" SET DEFAULT 0', 'ALTER TABLE "test table" ALTER "test column" DROP DEFAULT')
+, ('trigger', 'test table', 'test trigger', 'CREATE TRIGGER "test trigger" AFTER INSERT ON "test table" FOR EACH ROW EXECUTE PROCEDURE tg_null()', 'DROP TRIGGER "test trigger" ON "test table"')
+;
 
-/* Not supported
+/* EXCLUDED CODE: Not supported
 composite type|test complex type||CREATE TYPE "test complex type" AS(r real, i real)|DROP TYPE "test complex type"
 view column|test view|test column|\N|\N
 materialized view column|test materialized view 2|test materialized view column|CREATE MATERIALIZED VIEW "test materialized view 2" AS SELECT (1,2)::"test complex type" AS "test materialized view column"|DROP MATERIALIZED VIEW "test materialized view 2"
