@@ -26,7 +26,7 @@ if [ "$1" == "-f" ]; then
 fi
 
 echo Creating dump database
-createdb test_dump && psql -f test/dump/load_all.sql test_dump > $create_log || die 3 "Unable to create dump database"
+createdb test_dump && psql -Xf test/dump/load_all.sql test_dump > $create_log || die 3 "Unable to create dump database"
 
 # Ensure no errors in log
 check_log() {
@@ -45,8 +45,8 @@ check_log $create_log creation
 
 echo Running dump and restore
 # No real need to cat the log on failure here; psql will generate an error and even if not verify will almost certainly catch it
-createdb test_load && PAGER='' psql -c '\df pg_get_object_address' test_load || die 5 'crap'
-(echo 'BEGIN;' && pg_dump test_dump && echo 'COMMIT;') | psql -q -v VERBOSITY=verbose -v ON_ERROR_STOP=true test_load > $restore_log
+createdb test_load && PAGER='' psql -Xc '\df pg_get_object_address' test_load || die 5 'crap'
+(echo 'BEGIN;' && pg_dump test_dump && echo 'COMMIT;') | psql -q -X -v VERBOSITY=verbose -v ON_ERROR_STOP=true test_load > $restore_log
 rc=$?
 if [ $rc -ne 0 ]; then
   cat $restore_log
@@ -54,7 +54,7 @@ if [ $rc -ne 0 ]; then
 fi
 
 echo Verifying restore
-psql -f test/dump/verify.sql test_load > $verify_log || die 5 "Test failed"
+psql -Xf test/dump/verify.sql test_load > $verify_log || die 5 "Test failed"
 
 check_log $create_log verify
 
