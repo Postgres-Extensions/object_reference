@@ -9,8 +9,10 @@ name: Claude Code Review
 # write-capable token. The job is gated to PRs from the trusted `jnasbyupgrade`
 # fork only — an arbitrary external fork can never trigger this secret-bearing
 # job. The workflow file always comes from the base branch (master), so a PR
-# cannot modify the reviewer that runs on it. We check out the PR head only for
-# read context (persist-credentials: false) and never build or execute PR code.
+# cannot modify the reviewer that runs on it. This workflow never checks out
+# the PR's own ref into the workspace (see the checkout step below) --
+# claude-code-action fetches and reads the PR's content itself, safely, and
+# never builds or executes it.
 on:
   pull_request_target:
     types: [opened, synchronize, reopened, ready_for_review]
@@ -21,11 +23,30 @@ concurrency:
 
 jobs:
   claude-review:
-    # Trusted fork only, and skip drafts (don't spend API/CI on unfinished PRs).
-    # To add more trusted owners, extend the head-owner check.
+    # !!! SECURITY-CRITICAL -- DO NOT REMOVE OR WEAKEN THE user.login CHECK
+    # BELOW !!! It is the ONLY thing standing between an arbitrary external
+    # PR and this job's write-capable GITHUB_TOKEN and CLAUDE_CODE_OAUTH_TOKEN.
+    # Drop or loosen this check and any PR can trigger a job that runs with
+    # this repo's secrets. To trust an additional person, EXTEND this
+    # condition explicitly (e.g. `|| ... == 'other-trusted-account'`) --
+    # never replace it with something broader (a wildcard, a check on a
+    # label or a comment -- those ARE attacker-controlled on their own PR,
+    # unlike `user.login`, which is GitHub's own authenticated record of who
+    # actually opened the PR and can't be spoofed by anyone else).
+    #
+    # Deliberately checks the PR AUTHOR (user.login), not
+    # head.repo.owner.login: the latter only identifies "who owns the fork"
+    # for fork-headed PRs -- for an upstream-branch-headed PR (base and head
+    # both in this repo, e.g. from `gh stack`, or `gh pr create` without a
+    # fork), it's always this repo's own org, never the actual author, so
+    # that check silently skipped review on every such PR regardless of who
+    # opened it. `user.login` works correctly for both fork-headed and
+    # upstream-branch-headed PRs.
+    #
+    # Skip drafts too (don't spend API/CI on unfinished PRs).
     if: >-
       github.event.pull_request.draft == false &&
-      github.event.pull_request.head.repo.owner.login == 'jnasbyupgrade'
+      github.event.pull_request.user.login == 'jnasbyupgrade'
     runs-on: ubuntu-latest
     timeout-minutes: 60
     permissions:
@@ -74,16 +95,26 @@ jobs:
           echo "decision=$decision" >> "$GITHUB_OUTPUT"
           echo "gate decision: $decision"
 
-      - name: Check out PR head (read-only context)
+      - name: Check out base branch
         if: steps.gate.outputs.decision == 'run'
+        # Deliberately NO ref:/repository: override -- this checks out this
+        # repo's own base branch (master), not the PR's fork/ref. Checking
+        # out an untrusted PR ref into the workspace root before this action
+        # is exactly the anti-pattern anthropics/claude-code-action's own
+        # docs/security.md warns against; its "preferred" pattern is a plain
+        # checkout of the base ref, nothing more. claude-code-action fetches
+        # and reviews the PR's actual content itself, from ITS OWN internal
+        # logic (see its src/github/operations/branch.ts): for a fork PR it
+        # fetches origin's refs/pull/<n>/head -- a ref GitHub maintains on
+        # THIS repo for any PR, fork or not, so it never needs direct access
+        # to the fork's own remote at all. That's why this step must leave
+        # `origin` pointing at this repo (the default) rather than being
+        # redirected to the fork: an earlier version of this step did that,
+        # which broke the action's own internal fetch ("couldn't find remote
+        # ref pull/<n>/head") since that ref doesn't exist on the fork.
         # Intentionally tracks the major-version tag (not a pinned SHA) so
         # upstream fixes are picked up automatically.
         uses: actions/checkout@v4
-        with:
-          repository: ${{ github.event.pull_request.head.repo.full_name }}
-          ref: ${{ github.event.pull_request.head.sha }}
-          fetch-depth: 1
-          persist-credentials: false
 
       - name: Run Claude Code Review
         if: steps.gate.outputs.decision == 'run'
