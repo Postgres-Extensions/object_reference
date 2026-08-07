@@ -23,19 +23,30 @@ concurrency:
 
 jobs:
   claude-review:
-    # !!! SECURITY-CRITICAL -- DO NOT REMOVE OR WEAKEN THE head.repo.owner.login
-    # CHECK BELOW !!! It is the ONLY thing standing between an arbitrary external
-    # fork's PR and this job's write-capable GITHUB_TOKEN and
-    # CLAUDE_CODE_OAUTH_TOKEN. Drop or loosen this check and any fork can trigger
-    # a job that runs with this repo's secrets. To trust an additional fork,
-    # EXTEND this condition explicitly (e.g. `|| ... == 'other-trusted-account'`) --
-    # never replace it with something broader (a wildcard, a check on PR author
-    # instead of head repo owner, etc.).
+    # !!! SECURITY-CRITICAL -- DO NOT REMOVE OR WEAKEN THE user.login CHECK
+    # BELOW !!! It is the ONLY thing standing between an arbitrary external
+    # PR and this job's write-capable GITHUB_TOKEN and CLAUDE_CODE_OAUTH_TOKEN.
+    # Drop or loosen this check and any PR can trigger a job that runs with
+    # this repo's secrets. To trust an additional person, EXTEND this
+    # condition explicitly (e.g. `|| ... == 'other-trusted-account'`) --
+    # never replace it with something broader (a wildcard, a check on a
+    # label or a comment -- those ARE attacker-controlled on their own PR,
+    # unlike `user.login`, which is GitHub's own authenticated record of who
+    # actually opened the PR and can't be spoofed by anyone else).
+    #
+    # Deliberately checks the PR AUTHOR (user.login), not
+    # head.repo.owner.login: the latter only identifies "who owns the fork"
+    # for fork-headed PRs -- for an upstream-branch-headed PR (base and head
+    # both in this repo, e.g. from `gh stack`, or `gh pr create` without a
+    # fork), it's always this repo's own org, never the actual author, so
+    # that check silently skipped review on every such PR regardless of who
+    # opened it. `user.login` works correctly for both fork-headed and
+    # upstream-branch-headed PRs.
     #
     # Skip drafts too (don't spend API/CI on unfinished PRs).
     if: >-
       github.event.pull_request.draft == false &&
-      github.event.pull_request.head.repo.owner.login == 'jnasbyupgrade'
+      github.event.pull_request.user.login == 'jnasbyupgrade'
     runs-on: ubuntu-latest
     timeout-minutes: 60
     permissions:
