@@ -53,6 +53,13 @@ SELECT bag_eq(
       UNION -- Intentionally not UNION ALL; we want to know if object_reference.unsupported has dupes
       SELECT * FROM cat_tools.objects__address_unsupported_srf()
       UNION SELECT 'event trigger'
+      /*
+       * pg_identify_object_as_address() returns these as plain "table"/"index",
+       * and pg_get_object_address() doesn't recognize "partitioned table" or
+       * "partitioned index" at all, so the round-trip is broken.
+       */
+      UNION SELECT 'partitioned table'
+      UNION SELECT 'partitioned index'
     $$
   , 'Verify object_reference.unsupported()'
 );
