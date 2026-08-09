@@ -21,7 +21,12 @@ control.mk
 .deps/
 
 # built targets
-# Note: Version-specific files (sql/*--*.sql) are now tracked in git and should be committed
+# Note: Version-specific files (sql/*--*.sql) are frozen releases and are
+# tracked in git / committed -- EXCEPT sql/object_reference--stable.sql below,
+# which is not a release: 'stable' is a build-time literal that control.mk
+# regenerates from sql/object_reference.sql on every build, so committing it
+# would just be duplicated, driftable content.
+sql/object_reference--stable.sql
 
 # Test artifacts
 results/
