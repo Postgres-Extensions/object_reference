@@ -595,60 +595,6 @@ $body$
 );
 
 /*
- * capture__start(object_group_id int): body text only differs from 0.1.0 by
- * an added "EXCLUDED CODE" annotation on an already-dead comment block (the
- * commented-out CREATE TEMP TABLE ... AS alternative) -- no behavior change,
- * but recreated anyway so the update path converges byte-for-byte with a
- * fresh install rather than leaving a purely cosmetic difference in place.
- */
-SELECT __object_reference.create_function(
-  'object_reference.capture__start'
-  , $args$
-  object_group_id _object_reference.object_group.object_group_id%TYPE
-$args$
-  , 'int SECURITY DEFINER LANGUAGE plpgsql'
-  , $body$
-DECLARE
-  c_next_level int := coalesce(capture_level, 0) + 1 FROM object_reference.capture__get_current();
-BEGIN
-  -- Ensure object group exists
-  PERFORM object_reference.object_group__get(object_group_id);
-
-  INSERT INTO pg_temp.__object_reference__ddl_capture 
-    SELECT c_next_level, capture__start.object_group_id
-  ;
-  RETURN c_next_level;
-
-EXCEPTION WHEN undefined_table THEN
-  /* EXCLUDED CODE
-  CREATE TEMP TABLE __object_reference__ddl_capture AS
-    SELECT c_next_level, capture__start.object_group_id
-  ;
-  */
-  CREATE TEMP TABLE __object_reference__ddl_capture(
-    capture_level int PRIMARY KEY
-    , object_group_id INT NOT NULL -- temp tables can't reference permanent ones
-  );
-  -- This breaks if run directly under plpgsql
-  EXECUTE $code$
-  CREATE CONSTRAINT TRIGGER verify_capture_stop AFTER INSERT
-    ON pg_temp.__object_reference__ddl_capture 
-    DEFERRABLE INITIALLY DEFERRED
-    FOR EACH ROW -- CONSTRAINT triggers must be per-ROW
-    EXECUTE PROCEDURE _object_reference._tg_capture_safety()
-  $code$;
-
-  INSERT INTO pg_temp.__object_reference__ddl_capture 
-    SELECT c_next_level, capture__start.object_group_id
-  ;
-  RETURN c_next_level;
-END
-$body$
-  , 'Begin capturing newly created objects to <object_group_id>. Returns current capture level.'
-  , 'object_reference__usage'
-);
-
-/*
  * New: example/debug event-trigger functions (not wired to any CREATE EVENT
  * TRIGGER -- 0.1.0 had an equivalent commented-out "snitch" example instead).
  */
