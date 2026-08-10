@@ -2,26 +2,16 @@
 This extension must be loaded via CREATE EXTENSION object_reference;
 You really, REALLY do NOT want to try and load this via psql!!!
 
-psql:test/temp_load.not_sql:176: WARNING:  I promise you will be sorry if you try to use this as anything other than an extension!
+psql:test/temp_load.not_sql:184: WARNING:  I promise you will be sorry if you try to use this as anything other than an extension!
 
-psql:test/temp_load.not_sql:177: WARNING:  I promise you will be sorry if you try to use this as anything other than an extension!
-
-
-psql:test/temp_load.not_sql:323: NOTICE:  type reference _object_reference._object_oid.object_id%TYPE converted to integer
-psql:test/temp_load.not_sql:323: NOTICE:  type reference _object_reference.object.object_type%TYPE converted to cat_tools.object_type
-psql:test/temp_load.not_sql:323: NOTICE:  type reference _object_reference._object_oid.classid%TYPE converted to oid
-psql:test/temp_load.not_sql:323: NOTICE:  type reference _object_reference._object_oid.objid%TYPE converted to oid
-psql:test/temp_load.not_sql:323: NOTICE:  type reference _object_reference._object_oid.objsubid%TYPE converted to integer
-psql:test/temp_load.not_sql:323: NOTICE:  type reference _object_reference._object_oid.object_id%TYPE converted to integer
-psql:test/temp_load.not_sql:323: NOTICE:  type reference _object_reference.object.object_type%TYPE converted to cat_tools.object_type
-psql:test/temp_load.not_sql:323: NOTICE:  type reference _object_reference._object_oid.classid%TYPE converted to oid
-psql:test/temp_load.not_sql:323: NOTICE:  type reference _object_reference._object_oid.objid%TYPE converted to oid
-psql:test/temp_load.not_sql:323: NOTICE:  type reference _object_reference._object_oid.objsubid%TYPE converted to integer
+psql:test/temp_load.not_sql:185: WARNING:  I promise you will be sorry if you try to use this as anything other than an extension!
 
 
 
 
-psql:test/temp_load.not_sql:431: WARNING:  I promise you will be sorry if you try to use this as anything other than an extension!
+
+
+psql:test/temp_load.not_sql:433: WARNING:  I promise you will be sorry if you try to use this as anything other than an extension!
 
 
 
@@ -31,80 +21,32 @@ psql:test/temp_load.not_sql:431: WARNING:  I promise you will be sorry if you tr
 
 
 
-psql:test/temp_load.not_sql:543: WARNING:  I promise you will be sorry if you try to use this as anything other than an extension!
+psql:test/temp_load.not_sql:545: WARNING:  I promise you will be sorry if you try to use this as anything other than an extension!
 
-psql:test/temp_load.not_sql:550: WARNING:  I promise you will be sorry if you try to use this as anything other than an extension!
-
-
-psql:test/temp_load.not_sql:595: NOTICE:  type reference _object_reference.object_group.object_group_name%TYPE converted to character varying
-psql:test/temp_load.not_sql:595: NOTICE:  type reference _object_reference.object_group.object_group_name%TYPE converted to character varying
-
-psql:test/temp_load.not_sql:620: NOTICE:  type reference _object_reference.object_group.object_group_id%TYPE converted to integer
-psql:test/temp_load.not_sql:620: NOTICE:  type reference _object_reference.object_group.object_group_id%TYPE converted to integer
-
-psql:test/temp_load.not_sql:635: NOTICE:  type reference _object_reference.object_group.object_group_name%TYPE converted to character varying
-psql:test/temp_load.not_sql:635: NOTICE:  type reference _object_reference.object_group.object_group_name%TYPE converted to character varying
-
-psql:test/temp_load.not_sql:662: NOTICE:  type reference _object_reference.object_group.object_group_id%TYPE converted to integer
-psql:test/temp_load.not_sql:662: NOTICE:  type reference _object_reference.object_group.object_group_id%TYPE converted to integer
-
-psql:test/temp_load.not_sql:678: NOTICE:  type reference _object_reference.object_group.object_group_name%TYPE converted to character varying
-psql:test/temp_load.not_sql:678: NOTICE:  type reference _object_reference.object_group.object_group_name%TYPE converted to character varying
-
-psql:test/temp_load.not_sql:695: NOTICE:  type reference _object_reference.object_group__object.object_group_id%TYPE converted to integer
-psql:test/temp_load.not_sql:695: NOTICE:  type reference _object_reference.object_group__object.object_id%TYPE converted to integer
-psql:test/temp_load.not_sql:695: NOTICE:  type reference _object_reference.object_group__object.object_group_id%TYPE converted to integer
-psql:test/temp_load.not_sql:695: NOTICE:  type reference _object_reference.object_group__object.object_id%TYPE converted to integer
-
-psql:test/temp_load.not_sql:729: NOTICE:  type reference _object_reference.object_group__object.object_group_id%TYPE converted to integer
-psql:test/temp_load.not_sql:729: NOTICE:  type reference _object_reference.object_group__object.object_id%TYPE converted to integer
-psql:test/temp_load.not_sql:729: NOTICE:  type reference _object_reference.object_group__object.object_group_id%TYPE converted to integer
-psql:test/temp_load.not_sql:729: NOTICE:  type reference _object_reference.object_group__object.object_id%TYPE converted to integer
+psql:test/temp_load.not_sql:552: WARNING:  I promise you will be sorry if you try to use this as anything other than an extension!
 
 
 
 
 
 
-psql:test/temp_load.not_sql:967: NOTICE:  type reference _object_reference.object.object_type%TYPE converted to cat_tools.object_type
-psql:test/temp_load.not_sql:967: NOTICE:  type reference _object_reference._object_oid.objid%TYPE converted to oid
-psql:test/temp_load.not_sql:967: NOTICE:  type reference _object_reference._object_oid.objsubid%TYPE converted to integer
-psql:test/temp_load.not_sql:967: NOTICE:  type reference _object_reference.object.object_type%TYPE converted to cat_tools.object_type
-psql:test/temp_load.not_sql:967: NOTICE:  type reference _object_reference._object_oid.objid%TYPE converted to oid
-psql:test/temp_load.not_sql:967: NOTICE:  type reference _object_reference._object_oid.objsubid%TYPE converted to integer
 
 
-psql:test/temp_load.not_sql:1194: NOTICE:  type reference _object_reference.object_group.object_group_name%TYPE converted to character varying
-psql:test/temp_load.not_sql:1194: NOTICE:  type reference _object_reference.object_group.object_group_name%TYPE converted to character varying
 
-psql:test/temp_load.not_sql:1208: NOTICE:  type reference _object_reference.object_group.object_group_name%TYPE converted to character varying
-psql:test/temp_load.not_sql:1208: NOTICE:  type reference _object_reference.object_group.object_group_name%TYPE converted to character varying
 
-psql:test/temp_load.not_sql:1235: NOTICE:  type reference _object_reference.object_group.object_group_id%TYPE converted to integer
-psql:test/temp_load.not_sql:1235: NOTICE:  type reference _object_reference.object_group.object_group_name%TYPE converted to character varying
-psql:test/temp_load.not_sql:1235: NOTICE:  type reference _object_reference.object_group.object_group_id%TYPE converted to integer
-psql:test/temp_load.not_sql:1235: NOTICE:  type reference _object_reference.object_group.object_group_name%TYPE converted to character varying
-psql:test/temp_load.not_sql:1235: NOTICE:  type reference _object_reference.object_group.object_group_id%TYPE converted to integer
-psql:test/temp_load.not_sql:1235: NOTICE:  type reference _object_reference.object_group.object_group_name%TYPE converted to character varying
 
-psql:test/temp_load.not_sql:1249: NOTICE:  type reference _object_reference.object_group.object_group_id%TYPE converted to integer
-psql:test/temp_load.not_sql:1249: NOTICE:  type reference _object_reference.object_group.object_group_name%TYPE converted to character varying
-psql:test/temp_load.not_sql:1249: NOTICE:  type reference _object_reference.object_group.object_group_id%TYPE converted to integer
-psql:test/temp_load.not_sql:1249: NOTICE:  type reference _object_reference.object_group.object_group_name%TYPE converted to character varying
-psql:test/temp_load.not_sql:1249: NOTICE:  type reference _object_reference.object_group.object_group_id%TYPE converted to integer
-psql:test/temp_load.not_sql:1249: NOTICE:  type reference _object_reference.object_group.object_group_name%TYPE converted to character varying
 
-psql:test/temp_load.not_sql:1296: NOTICE:  type reference _object_reference.object_group.object_group_id%TYPE converted to integer
-psql:test/temp_load.not_sql:1296: NOTICE:  type reference _object_reference.object_group.object_group_id%TYPE converted to integer
 
-psql:test/temp_load.not_sql:1310: NOTICE:  type reference _object_reference.object_group.object_group_name%TYPE converted to character varying
-psql:test/temp_load.not_sql:1310: NOTICE:  type reference _object_reference.object_group.object_group_name%TYPE converted to character varying
 
-psql:test/temp_load.not_sql:1355: NOTICE:  type reference _object_reference.object_group.object_group_id%TYPE converted to integer
-psql:test/temp_load.not_sql:1355: NOTICE:  type reference _object_reference.object_group.object_group_id%TYPE converted to integer
 
-psql:test/temp_load.not_sql:1369: NOTICE:  type reference _object_reference.object_group.object_group_name%TYPE converted to character varying
-psql:test/temp_load.not_sql:1369: NOTICE:  type reference _object_reference.object_group.object_group_name%TYPE converted to character varying
+
+
+
+
+
+
+
+
 
 
 

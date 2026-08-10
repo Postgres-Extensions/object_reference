@@ -195,11 +195,7 @@ CREATE TABLE _object_reference._object_oid(
     */
   , objid         oid                     NOT NULL
   , objsubid      int                     NOT NULL
-    CONSTRAINT objid_must_match CHECK( -- _object_reference._sanity() depends on this!
-      objid IS NOT DISTINCT FROM object_oid
-    )
   , CONSTRAINT object__u_classid__objid__objsubid UNIQUE( classid, objid, objsubid )
-  , object_oid    oid                     NOT NULL
 );
 
 SELECT __object_reference.create_function(
@@ -260,7 +256,6 @@ CREATE VIEW _object_reference._object_v AS
       , i.classid
       , i.objid
       , i.objsubid
-      , i.object_oid
       , s.*
     FROM _object_reference.object o
       LEFT JOIN _object_reference._object_oid i USING(object_id)
@@ -275,7 +270,6 @@ CREATE VIEW _object_reference._object_v__for_update AS
       , i.classid
       , i.objid
       , i.objsubid
-      , i.object_oid
       , s.*
     FROM _object_reference.object o
       LEFT JOIN _object_reference._object_oid i USING(object_id)
@@ -307,8 +301,8 @@ BEGIN
     ;
   END IF;
   BEGIN
-    INSERT INTO _object_reference._object_oid(object_id, classid, objid, objsubid, object_oid)
-      VALUES (object_id, classid, objid, objsubid, objid);
+    INSERT INTO _object_reference._object_oid(object_id, classid, objid, objsubid)
+      VALUES (object_id, classid, objid, objsubid);
 
     SELECT INTO STRICT r_object_v -- Record better exist!
         *

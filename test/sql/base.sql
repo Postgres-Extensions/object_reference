@@ -32,9 +32,9 @@ SELECT lives_ok(
   , $$CREATE TEMP TABLE test_object AS SELECT object_reference.object__getsert('table', 'test_table') AS object_id;$$
 );
 SELECT is(
-  (SELECT object_oid FROM _object_reference._object_v WHERE object_id = (SELECT object_id FROM test_object))
+  (SELECT objid FROM _object_reference._object_v WHERE object_id = (SELECT object_id FROM test_object))
   , 'test_table'::regclass::oid
-  , 'Verify object_oid field is correct'
+  , 'Verify objid field is correct'
 );
 
 -- Test object__describe function
