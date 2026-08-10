@@ -39,7 +39,7 @@ SELECT plan(
 
   +4      -- __object__remove
 
-  +4 + 2  -- __remove
+  +3 + 2  -- __remove
   +4      -- cleanup tests
   +1      -- final group removal (there was always an extra test)
 );
