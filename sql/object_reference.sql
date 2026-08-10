@@ -2,12 +2,14 @@
 \echo You really, REALLY do NOT want to try and load this via psql!!!
 \echo It will FAIL during pg_dump! \quit
 
--- SET LOCAL, not SET: this script runs inside CREATE EXTENSION's implicit
--- transaction, so LOCAL reverts automatically once it commits -- a plain SET
--- would leak into the installing session for the rest of its lifetime.
--- Suppresses NOTICEs like the %TYPE resolution messages this script's many
--- column-type references (e.g. _object_oid.objid%TYPE) would otherwise spam
--- CREATE EXTENSION's output with.
+/*
+ * SET LOCAL, not SET: this script runs inside CREATE EXTENSION's implicit
+ * transaction, so LOCAL reverts automatically once it commits -- a plain SET
+ * would leak into the installing session for the rest of its lifetime.
+ * Suppresses NOTICEs like the %TYPE resolution messages this script's many
+ * column-type references (e.g. _object_oid.objid%TYPE) would otherwise spam
+ * CREATE EXTENSION's output with.
+ */
 SET LOCAL client_min_messages = WARNING;
 
 /*
