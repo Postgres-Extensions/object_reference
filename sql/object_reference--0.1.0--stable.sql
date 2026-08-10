@@ -13,8 +13,10 @@
  *     which called count_nulls' not_null_count_trigger(), is removed.
  *   - The reg* pseudotype columns on _object_reference._object_oid
  *     (regclass/regconfig/regdictionary/regnamespace/regoperator/
- *     regprocedure/regtype) are removed in favor of a single plain `oid`
- *     column (object_oid), and classid changes from regclass to oid.
+ *     regprocedure/regtype), plus the now-redundant object_oid column they
+ *     used to collapse into (it always equaled objid once there was only
+ *     one oid source left), are all dropped; classid changes from regclass
+ *     to oid.
  *   - _object_reference._object_v / _object_v__for_update (views) drop the
  *     now-gone reg* columns. CREATE OR REPLACE VIEW cannot drop columns, so
  *     both are DROP+CREATE'd, along with the two functions whose RETURNS
@@ -49,7 +51,10 @@
  * comparison of every recreated function/view against a fresh install of the
  * current version backs this file -- see the containing PR's description).
  */
-SET client_min_messages = WARNING;
+-- SET LOCAL, not SET: this script runs inside ALTER EXTENSION UPDATE's
+-- implicit transaction, so LOCAL reverts automatically once it commits --
+-- see sql/object_reference.sql's own identical comment on this same point.
+SET LOCAL client_min_messages = WARNING;
 
 CREATE SCHEMA __object_reference;
 
@@ -205,12 +210,14 @@ DROP VIEW _object_reference._object_v__for_update;
 DROP VIEW _object_reference._object_v;
 
 /*
- * _object_reference._object_oid: drop the reg* pseudotype columns and the
- * count_nulls-backed trigger that enforced "exactly one is set", in favor of
- * a single NOT NULL object_oid column. Order below is fully explicit
- * (constraints/indexes/trigger dropped by name, not left to an implicit
- * CASCADE) so nothing is silently dropped alongside a `DROP COLUMN` we did
- * not ask for.
+ * _object_reference._object_oid: drop the reg* pseudotype columns, the
+ * count_nulls-backed trigger that enforced "exactly one is set", and
+ * object_oid itself (it only ever existed to collapse whichever reg* column
+ * applied into a single plain-oid value -- with no reg* columns left, it's
+ * pure redundant storage of objid and buys nothing). Order below is fully
+ * explicit (constraints/indexes/trigger dropped by name, not left to an
+ * implicit CASCADE) so nothing is silently dropped alongside a `DROP COLUMN`
+ * we did not ask for.
  */
 ALTER TABLE _object_reference._object_oid
   DROP CONSTRAINT regclass_classid
@@ -232,16 +239,6 @@ DROP INDEX _object_reference._object_oid__u_regoperator;
 DROP INDEX _object_reference._object_oid__u_regprocedure;
 DROP INDEX _object_reference._object_oid__u_regtype;
 
-/*
- * Backfill: 0.1.0 only ever populated ONE of {regclass, ..., regtype,
- * object_oid} per row (whichever reg* type applied; object_oid itself only
- * when none did). objid was always kept equal to that same value (that's
- * exactly what the old objid_must_match CHECK enforced), so copying objid
- * into object_oid for every row is correct regardless of which reg* column
- * used to carry it, and is a no-op where object_oid already matched.
- */
-UPDATE _object_reference._object_oid SET object_oid = objid WHERE object_oid IS NULL;
-
 ALTER TABLE _object_reference._object_oid
   DROP COLUMN regclass
   , DROP COLUMN regconfig
@@ -250,9 +247,8 @@ ALTER TABLE _object_reference._object_oid
   , DROP COLUMN regoperator
   , DROP COLUMN regprocedure
   , DROP COLUMN regtype
+  , DROP COLUMN object_oid
   , ALTER COLUMN classid TYPE oid USING classid::oid
-  , ALTER COLUMN object_oid SET NOT NULL
-  , ADD CONSTRAINT objid_must_match CHECK ( objid IS NOT DISTINCT FROM object_oid ) -- _object_reference._sanity() depends on this!
 ;
 
 CREATE VIEW _object_reference._object_v AS
@@ -264,7 +260,6 @@ CREATE VIEW _object_reference._object_v AS
       , i.classid
       , i.objid
       , i.objsubid
-      , i.object_oid
       , s.*
     FROM _object_reference.object o
       LEFT JOIN _object_reference._object_oid i USING(object_id)
@@ -279,7 +274,6 @@ CREATE VIEW _object_reference._object_v__for_update AS
       , i.classid
       , i.objid
       , i.objsubid
-      , i.object_oid
       , s.*
     FROM _object_reference.object o
       LEFT JOIN _object_reference._object_oid i USING(object_id)
@@ -440,8 +434,8 @@ BEGIN
     ;
   END IF;
   BEGIN
-    INSERT INTO _object_reference._object_oid(object_id, classid, objid, objsubid, object_oid)
-      VALUES (object_id, classid, objid, objsubid, objid);
+    INSERT INTO _object_reference._object_oid(object_id, classid, objid, objsubid)
+      VALUES (object_id, classid, objid, objsubid);
 
     SELECT INTO STRICT r_object_v -- Record better exist!
         *
