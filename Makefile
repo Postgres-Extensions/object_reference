@@ -5,13 +5,6 @@ testdeps: test_factory
 
 install: cat_tools count_nulls
 
-# pgxntool's check-stale-expected target (added in pgxntool 2.2.0) depends on
-# installcheck but is listed before install in TEST_DEPS, and Make evaluates a
-# target's prerequisites in file-parse order across stanzas -- so plain
-# `make test` ran installcheck before install ever happened. Force installcheck
-# to require install locally until that's fixed upstream.
-installcheck: install
-
 test: dump_test
 extra_clean += $(wildcard test/dump/*.log)
 dump_test: test/dump/run.sh test/helpers/object_table.sql $(wildcard test/dump/*.sql)
