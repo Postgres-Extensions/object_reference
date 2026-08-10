@@ -96,6 +96,24 @@ jobs:
           json=$(printf '%s\n' $supported | paste -sd, - | sed 's/^/[/; s/$/]/')
           echo "supported_pg=$json" >> "$GITHUB_OUTPUT"
 
+  # Style linter (https://github.com/Postgres-Extensions/linter, vendored at
+  # .vendor/linter -- lint.mk is the thin local hand-off, see its comment).
+  # Deliberately checked out WITHOUT submodules -- `make lint` is the same
+  # command a developer runs locally, and lint.mk self-initializes the
+  # submodule on first use. Using the exact same entry point here is what
+  # actually proves that self-init works, rather than papering over it with
+  # a submodules: true checkout.
+  lint:
+    needs: [changes]
+    if: needs.changes.outputs.docs_only != 'true'
+    name: 🧹 SQL Lint
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out the repo
+        uses: actions/checkout@v4
+      - name: Lint SQL
+        run: make lint
+
   test:
     needs: [changes]
     if: needs.changes.outputs.docs_only != 'true'
@@ -128,7 +146,7 @@ jobs:
   # (e.g. test, on a docs-only push), and fails if any failed or were
   # cancelled.
   all-checks-passed:
-    needs: [changes, test]
+    needs: [changes, lint, test]
     if: always()
     runs-on: ubuntu-latest
     steps:
