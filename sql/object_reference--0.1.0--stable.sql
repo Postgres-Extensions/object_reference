@@ -51,13 +51,6 @@
  * comparison of every recreated function/view against a fresh install of the
  * current version backs this file -- see the containing PR's description).
  */
-/*
- * SET LOCAL, not SET: this script runs inside ALTER EXTENSION UPDATE's
- * implicit transaction, so LOCAL reverts automatically once it commits --
- * see sql/object_reference.sql's own identical comment on this same point.
- */
-SET LOCAL client_min_messages = WARNING;
-
 CREATE SCHEMA __object_reference;
 
 CREATE FUNCTION __object_reference.exec(
