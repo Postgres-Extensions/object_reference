@@ -12,7 +12,7 @@
  */
 SET LOCAL client_min_messages = WARNING;
 
-/*
+/* EXCLUDED CODE: schema-restriction check below not currently enforced
 DO $$
 DECLARE
   c_schema CONSTANT name := (SELECT extnamespace::regnamespace::text FROM pg_extension WHERE extname = 'cat_tools');
