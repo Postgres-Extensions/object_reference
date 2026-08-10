@@ -35,7 +35,7 @@ SELECT plan(
   +1 --TODO + 2  -- __object__add
 
   +3      -- object__getsert with group
-  +3      -- Drop tests
+  +4      -- Drop tests
 
   +4      -- __object__remove
 
