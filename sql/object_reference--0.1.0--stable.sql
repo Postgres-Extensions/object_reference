@@ -649,6 +649,60 @@ CREATE EVENT TRIGGER drop
 $$);
 
 /*
+ * object_reference.capture__start(object_group_id): 0.1.0's body still has
+ * a dead, commented-out CREATE TEMP TABLE ... AS attempt inside the
+ * EXCEPTION handler that current source has since dropped -- functionally
+ * inert either way, but pg_get_functiondef() returns comments verbatim, so
+ * leaving it in place would make an updated install's function body
+ * literally differ from a fresh install's (caught by this repo's own
+ * fresh-vs-updated structural diff). Recreated here with the current,
+ * comment-free body; the other overload (capture__start(object_group_name),
+ * a thin wrapper) is untouched between 0.1.0 and current source and does
+ * not need recreating.
+ */
+SELECT __object_reference.create_function(
+  'object_reference.capture__start'
+  , $args$
+  object_group_id _object_reference.object_group.object_group_id%TYPE
+$args$
+  , 'int SECURITY DEFINER LANGUAGE plpgsql'
+  , $body$
+DECLARE
+  c_next_level int := coalesce(capture_level, 0) + 1 FROM object_reference.capture__get_current();
+BEGIN
+  -- Ensure object group exists
+  PERFORM object_reference.object_group__get(object_group_id);
+
+  INSERT INTO pg_temp.__object_reference__ddl_capture 
+    SELECT c_next_level, capture__start.object_group_id
+  ;
+  RETURN c_next_level;
+
+EXCEPTION WHEN undefined_table THEN
+  CREATE TEMP TABLE __object_reference__ddl_capture(
+    capture_level int PRIMARY KEY
+    , object_group_id INT NOT NULL -- temp tables can't reference permanent ones
+  );
+  -- This breaks if run directly under plpgsql
+  EXECUTE $code$
+  CREATE CONSTRAINT TRIGGER verify_capture_stop AFTER INSERT
+    ON pg_temp.__object_reference__ddl_capture 
+    DEFERRABLE INITIALLY DEFERRED
+    FOR EACH ROW -- CONSTRAINT triggers must be per-ROW
+    EXECUTE PROCEDURE _object_reference._tg_capture_safety()
+  $code$;
+
+  INSERT INTO pg_temp.__object_reference__ddl_capture 
+    SELECT c_next_level, capture__start.object_group_id
+  ;
+  RETURN c_next_level;
+END
+$body$
+  , 'Begin capturing newly created objects to <object_group_id>. Returns current capture level.'
+  , 'object_reference__usage'
+);
+
+/*
  * Re-enable the event triggers disabled near the top of this script, now
  * that every object they reference is back in its final, current-source
  * shape.
