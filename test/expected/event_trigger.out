@@ -42,5 +42,5 @@ ok 39 - Verify filler column record is deleted
 ok 40 - Verify objects still registered correctly
 ok 41 - Drop schema
 ok 42 - objects_view is empty
-ok 43 - object_reference schema(s) must not be part of the resolved search_path -- got {tap,public}
+ok 43 - object_reference schema(s) must not be part of the resolved search_path
 # TRANSACTION INTENTIONALLY LEFT OPEN!

@@ -1,5 +1,5 @@
 \set ECHO none
 1..2
 ok 1 - _object_v__for_update matches _object_v
-ok 2 - object_reference schema(s) must not be part of the resolved search_path -- got {tap,public}
+ok 2 - object_reference schema(s) must not be part of the resolved search_path
 # TRANSACTION INTENTIONALLY LEFT OPEN!

@@ -29,5 +29,5 @@ ok 26 - Object exists before cleanup test
 ok 27 - Remove from group triggers automatic cleanup attempt
 ok 28 - Object was automatically cleaned up after group removal
 ok 29 - Removing empty group works
-ok 30 - object_reference schema(s) must not be part of the resolved search_path -- got {tap,public}
+ok 30 - object_reference schema(s) must not be part of the resolved search_path
 # TRANSACTION INTENTIONALLY LEFT OPEN!

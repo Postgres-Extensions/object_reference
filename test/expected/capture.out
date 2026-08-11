@@ -69,5 +69,5 @@ ok 66 - Drop should fail while reference exists
 ok 67 - DROP table "test table"
 ok 68 - object_group_ids still has correct record count
 ok 69 - No object references remain
-ok 70 - object_reference schema(s) must not be part of the resolved search_path -- got {object_identity_temp_test_schema,test_support,tap,public}
+ok 70 - object_reference schema(s) must not be part of the resolved search_path
 # TRANSACTION INTENTIONALLY LEFT OPEN!

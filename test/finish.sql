@@ -15,10 +15,7 @@
  */
 SELECT ok(
     NOT ( 'object_reference' = ANY (current_schemas(false)) OR '_object_reference' = ANY (current_schemas(false)) )
-  , format(
-      'object_reference schema(s) must not be part of the resolved search_path -- got %s'
-      , current_schemas(false)
-    )
+  , 'object_reference schema(s) must not be part of the resolved search_path'
 );
 
 \i test/pgxntool/finish.sql

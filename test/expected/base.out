@@ -10,5 +10,5 @@ ok 7 - Existing object works, provides correct ID
 ok 8 - secondary may not be specified for table objects
 ok 9 - temp objects are rejected
 ok 10 - CREATE EXTENSION test_factory
-ok 11 - object_reference schema(s) must not be part of the resolved search_path -- got {tap,public}
+ok 11 - object_reference schema(s) must not be part of the resolved search_path
 # TRANSACTION INTENTIONALLY LEFT OPEN!
