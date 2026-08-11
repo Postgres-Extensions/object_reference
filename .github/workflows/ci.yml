@@ -1,3 +1,61 @@
+# ===========================================================================
+# Test strategy
+#
+# An object_reference install can be arrived at more than one way, each of
+# which can break differently, so each is exercised by its own job below:
+#
+#   - `changes`: cheap docs-only gate, PLUS the single source of truth for
+#     the supported-PostgreSQL-major list every other job's matrix derives
+#     from (see its own "Derive ..." step).
+#
+#   - `test`: FRESH install (CREATE EXTENSION at the current "stable"
+#     version) via `make test`, on every supported PostgreSQL major. The
+#     baseline a brand-new user gets.
+#
+#   - `extension-update-test`: UPDATE TO CURRENT. Installs the one real
+#     historical PGXN release (0.1.0), ALTER EXTENSION UPDATEs it to
+#     "stable" via bin/test_existing's update-scenario, structurally
+#     compares the result against a fresh "stable" install
+#     (bin/structural_diff -- so a divergent function/view body produced
+#     only by the update path, and never by a fresh install, cannot slip
+#     through silently), then runs the full pgTAP suite against that real
+#     updated database in `existing` mode (TEST_LOAD_SOURCE=existing,
+#     --use-existing). A planted dependency guard (a view hard-referencing
+#     _object_reference.object's row type) blocks a stray non-CASCADE DROP
+#     EXTENSION throughout, and is re-proved present after every step -- see
+#     bin/test_existing's own header for the full rationale. Runs on a
+#     SINGLE PostgreSQL major (the newest supported), not the full matrix:
+#     0.1.0's install script has no identified PostgreSQL-version floor (no
+#     SELECT * over a system catalog, no ALTER TYPE ... ADD VALUE), so
+#     crossing this axis against every major would just multiply job count
+#     for no added coverage.
+#
+#   - `pg-upgrade-stepwise`: BINARY pg_upgrade coverage. ONE cluster starts
+#     at the oldest supported PostgreSQL major with the one real historical
+#     PGXN release (0.1.0) installed, updates straight to the current
+#     version, then climbs every later supported major in sequence
+#     (e.g. 12→13→...→18) via a REAL binary pg_upgrade per step, running the
+#     full suite (existing mode) and re-proving the dependency guard after
+#     EVERY step. This catches a regression specific to one particular
+#     major-to-major boundary that a single before/after snapshot would
+#     never exercise -- a view/function that breaks because it touches
+#     catalog internals (columns added/exposed/removed between majors) is
+#     the concrete risk. No such construct has been found in object_reference
+#     today (checked directly -- no view or function selects * from a system
+#     catalog; every object_reference table/view is an ordinary user
+#     object), but that is a fact about the code today, not a permanent
+#     property of it, and this job is cheap (the same install+pg_upgrade
+#     shape as any other pg_upgrade leg, just run once per step) -- so
+#     "unlikely to catch anything today" is not treated as a reason to skip
+#     it; only genuine cost would be. There is no separate "single big jump"
+#     pg_upgrade job (cat_tools's `pg-upgrade-test`) -- with only one
+#     historical extension version and no identified PostgreSQL-version
+#     floor for it, a big-jump leg would add a second job with no coverage
+#     the stepwise climb doesn't already provide.
+#
+#   - `all-checks-passed`: single stable required-status-check name; see its
+#     own comment below.
+# ===========================================================================
 name: CI
 on:
   push:
@@ -14,15 +72,17 @@ jobs:
   # all-checks-passed check would then never report and get stuck Pending in
   # branch protection.
   #
-  # Also derives the supported-PostgreSQL-major list the test job's matrix
-  # consumes, from a single pair of constants below, so adding or dropping a
-  # major is a one-line edit here instead of touching the matrix directly.
+  # Also derives the supported-PostgreSQL-major lists the test job's matrix
+  # and the pg-upgrade-stepwise job's climb consume, from a single pair of
+  # constants below, so adding or dropping a major is a one-line edit here
+  # instead of touching either job directly.
   changes:
     name: 🔍 Detect changes & derive PG matrix
     runs-on: ubuntu-latest
     outputs:
       docs_only: ${{ steps.diff.outputs.docs_only }}
       supported_pg: ${{ steps.pg.outputs.supported_pg }}
+      climb_pg: ${{ steps.pg.outputs.climb_pg }}
     steps:
       - name: Check out the repo
         uses: actions/checkout@v4
@@ -71,13 +131,13 @@ jobs:
           echo "changed files:"
           echo "$CHANGED"
           echo "docs_only=$DOCS_ONLY" >> "$GITHUB_OUTPUT"
-      - name: Derive the supported-PostgreSQL-major list
+      - name: Derive the supported-PostgreSQL-major lists
         id: pg
         run: |
           # SINGLE SOURCE OF TRUTH for the supported PostgreSQL majors. To
-          # add or drop a major, edit only the two constants below; the test
-          # job's matrix derives its version list from them. Do NOT hardcode
-          # a supported major directly in a job matrix.
+          # add or drop a major, edit only the two constants below; every
+          # job's matrix/climb derives its version list from them. Do NOT
+          # hardcode a supported major directly in a job matrix or loop.
           #
           #   NEWEST        -- highest PostgreSQL major tested.
           #   CURRENT_FLOOR -- oldest major supported. object_reference
@@ -85,16 +145,32 @@ jobs:
           #                    and cat_tools's own current release declares
           #                    PostgreSQL 12 as its build floor, so
           #                    object_reference can't usefully claim support
-          #                    for anything older either.
+          #                    for anything older either. 0.1.0 (the one
+          #                    real historical PGXN release) has no
+          #                    PostgreSQL-version floor of its own (no
+          #                    SELECT * over a system catalog, no ALTER
+          #                    TYPE ... ADD VALUE in its update script), so
+          #                    unlike cat_tools's reference implementation
+          #                    there is no separate, older LEGACY_FLOOR --
+          #                    0.1.0 installs cleanly across the whole
+          #                    CURRENT_FLOOR..NEWEST range, and the stepwise
+          #                    climb (pg-upgrade-stepwise) starts right at
+          #                    CURRENT_FLOOR too.
           NEWEST=18
           CURRENT_FLOOR=12
 
           supported=$(seq "$NEWEST" -1 "$CURRENT_FLOOR")
+          # Ascending (ties floor-to-newest, opposite order from $supported
+          # above): pg-upgrade-stepwise reads the first element as its
+          # starting major and binary-pg_upgrades through the rest in turn.
+          climb=$(seq "$CURRENT_FLOOR" "$NEWEST")
 
           # Emit a JSON array for the test job's matrix to consume via
           # fromJSON.
           json=$(printf '%s\n' $supported | paste -sd, - | sed 's/^/[/; s/$/]/')
           echo "supported_pg=$json" >> "$GITHUB_OUTPUT"
+          # Space-separated for direct iteration in the stepwise bash loop.
+          echo "climb_pg=$(echo $climb)" >> "$GITHUB_OUTPUT"
 
   # Style linter (https://github.com/Postgres-Extensions/linter, vendored at
   # .vendor/linter -- lint.mk is the thin local hand-off, see its comment).
@@ -144,6 +220,169 @@ jobs:
         # suite's pgTAP-based tests) and exits non-zero on failure.
         run: make verify-results
 
+  # Extension UPDATE path: install the one real historical PGXN release
+  # (0.1.0), ALTER EXTENSION UPDATE to the current version ("stable"), and
+  # run the full suite against the real updated database in `existing` mode
+  # -- see the "Test strategy" comment at the top of this file and
+  # bin/test_existing's own header for the full flow and dependency-guard
+  # rationale.
+  extension-update-test:
+    # Gated behind test (not just changes): this job installs a second,
+    # older extension version and runs the update path, which is wasted
+    # effort against a baseline that's already broken by a failing
+    # fresh-install test. success() must be written explicitly -- GitHub
+    # only assumes success() as a job's default when it has no if: at all.
+    needs: [changes, test]
+    if: success() && needs.changes.outputs.docs_only != 'true'
+    name: ⬆️ Extension update test (0.1.0 → stable)
+    runs-on: ubuntu-latest
+    container: pgxn/pgxn-tools
+    steps:
+      # A single PostgreSQL major (the newest supported, from the `changes`
+      # job's single source of truth) -- see the Test strategy comment at
+      # the top of this file for why this isn't crossed against the full PG
+      # matrix.
+      - name: Start PostgreSQL ${{ fromJSON(needs.changes.outputs.supported_pg)[0] }}
+        run: pg-start ${{ fromJSON(needs.changes.outputs.supported_pg)[0] }}
+      - name: Check out the repo
+        uses: actions/checkout@v4
+      - name: Install object_reference + its 0.1.0-only test dependency (count_nulls)
+        # TEST_LOAD_SOURCE=update activates the Makefile's conditional
+        # `install: count_nulls` prerequisite (see the Makefile's own
+        # comment on it): 0.1.0's install script needs count_nulls even
+        # though current object_reference.control no longer declares it.
+        run: make install TEST_LOAD_SOURCE=update
+      - name: Update 0.1.0 -> stable, structurally compare, run the suite (existing mode)
+        run: bin/test_existing update-scenario object_reference_update 0.1.0
+
+  # Proves object_reference survives EVERY individual major-to-major binary
+  # pg_upgrade transition, not just the single newest-major snapshot the
+  # `test`/`extension-update-test` jobs above cover: ONE cluster that starts
+  # on the floor PostgreSQL major and climbs through every later supported
+  # major in sequence via a REAL binary pg_upgrade. See the "Test strategy"
+  # comment at the top of this file for why this is included even though no
+  # catalog-touching view/function has been found in object_reference today.
+  #
+  # Installs 0.1.0 on the floor major, updates it straight to the current
+  # version (0.1.0's update script has no PostgreSQL-version floor of its
+  # own -- no ALTER TYPE ... ADD VALUE -- so, unlike cat_tools's reference
+  # implementation, there is no reason to hold the extension at an old
+  # version through any step of the climb), then binary-pg_upgrades one
+  # major at a time through the rest of the range, running the full suite
+  # (existing mode) and re-proving the dependency guard after EVERY step.
+  #
+  # KNOWN FAILING as of PR #19: the very first climb step (12 -> 13) already
+  # fails restoring the new cluster's schema --
+  # `REFRESH MATERIALIZED VIEW "_object_reference"."_sentry_mv"` errors
+  # `pg_class heap OID value not set when in binary upgrade mode`. Confirmed
+  # general (reproduced with a bare non-extension materialized view against
+  # a scratch cluster started with postgres's own `-b` flag, no extension
+  # involved) -- a REFRESH creates a new heap, and nothing pre-assigns it a
+  # binary-upgrade OID the way pg_dump's own generated CREATE MATERIALIZED
+  # VIEW ... WITH NO DATA statements do, so pg_extension_config_dump() on a
+  # materialized view cannot survive binary pg_upgrade. _sentry_mv is marked
+  # that way deliberately (it forces object_reference.post_restore()'s
+  # OID-repair logic to re-run on any restore that doesn't itself re-run
+  # CREATE EXTENSION), so fixing this needs a maintainer decision on how to
+  # preserve that guarantee some other way -- see PR #19 for the fix
+  # directions considered so far.
+  pg-upgrade-stepwise:
+    # Gated behind test, not just changes -- see extension-update-test's
+    # needs comment above: every leg here would fail anyway against an
+    # already-broken baseline. success() must be written explicitly --
+    # GitHub only assumes success() as a job's default when it has no if: at
+    # all.
+    needs: [changes, test]
+    if: success() && needs.changes.outputs.docs_only != 'true'
+    name: 🪜 Stepwise pg_upgrade (0.1.0 → stable)
+    runs-on: ubuntu-latest
+    container: pgxn/pgxn-tools
+    env:
+      # Every pg_upgrade step pairs two clusters that must share initdb
+      # options (checksums, auth) or pg_upgrade refuses to run.
+      INITDB_OPTS: --data-checksums --auth trust
+      DB: object_reference_stepwise
+      # Ascending list of every supported PostgreSQL major, from the single
+      # source in the changes job -- so a new major joins the climb with no
+      # edit here. The first element is the climb's starting (floor) major.
+      CLIMB_PG: ${{ needs.changes.outputs.climb_pg }}
+    steps:
+      - name: Read the climb's starting (floor) PostgreSQL major
+        id: floor
+        run: echo "pg=$(set -- $CLIMB_PG; echo "$1")" >> "$GITHUB_OUTPUT"
+      - name: Start PostgreSQL ${{ steps.floor.outputs.pg }}
+        run: pg-start ${{ steps.floor.outputs.pg }}
+      - name: Recreate the floor cluster with data checksums enabled
+        # pg-start's default "test" cluster doesn't enable data checksums,
+        # but binary pg_upgrade requires the old and new clusters to have
+        # MATCHING checksum/auth settings.
+        run: |
+          pg_ctlcluster ${{ steps.floor.outputs.pg }} test stop
+          pg_dropcluster ${{ steps.floor.outputs.pg }} test
+          # -p 5432: pg_createcluster assigns the next available port, which
+          # may not be 5432 after pg-start has claimed and released it.
+          # Force 5432 so later psql/createdb calls connect without -p.
+          pg_createcluster -p 5432 ${{ steps.floor.outputs.pg }} test -- $INITDB_OPTS
+          pg_ctlcluster ${{ steps.floor.outputs.pg }} test start
+          pg_isready -t 30
+      - name: Check out the repo
+        uses: actions/checkout@v4
+      - name: Install object_reference + its 0.1.0-only test dependency (count_nulls) into the floor cluster
+        # TEST_LOAD_SOURCE=update activates the Makefile's conditional
+        # `install: count_nulls` prerequisite -- 0.1.0's install script
+        # needs count_nulls even though current object_reference.control no
+        # longer declares it. count_nulls stays installed as its own
+        # extension in the database even after updating object_reference
+        # past 0.1.0 (nothing drops it), so every later `make install` in
+        # this job's climb loop keeps passing TEST_LOAD_SOURCE=update too --
+        # pg_upgrade needs count_nulls's files present in each new cluster
+        # for as long as it remains a real extension in the test database.
+        run: make install TEST_LOAD_SOURCE=update
+      - name: Prepare the floor cluster (install 0.1.0, plant guard, update to current, run suite)
+        run: |
+          bin/test_existing prepare-old "$DB" 0.1.0
+          bin/test_existing update "$DB"
+          bin/test_existing run-suite "$DB"
+      - name: Climb every later major via binary pg_upgrade
+        # One sequential loop; each iteration binary-pg_upgrades the cluster
+        # from $old to $new (a single major step), re-installs
+        # object_reference + its dependencies into the new cluster first
+        # (pg_upgrade needs their files present in the NEW cluster's
+        # sharedir -- default pg_config on PATH may not be $new's once
+        # several majors are installed, hence PG_CONFIG explicit), then
+        # re-runs the full suite in existing mode -- re-proving the
+        # dependency guard survived, and that the same suite/expected-output
+        # still passes against the objects that just crossed a pg_upgrade.
+        run: |
+          set -- $CLIMB_PG
+          old=$1
+          shift
+          for new in "$@"; do
+            echo "=== binary pg_upgrade PostgreSQL $old -> $new ==="
+            apt-get install -y postgresql-$new postgresql-server-dev-$new
+            make install PG_CONFIG=/usr/lib/postgresql/$new/bin/pg_config TEST_LOAD_SOURCE=update
+            pg_ctlcluster $old test stop
+            pg_createcluster -p 5432 $new test -- $INITDB_OPTS
+            # PG17+ writes pg_upgrade logs under the new datadir; older
+            # versions write to CWD. Dump both on failure.
+            mkdir -p /tmp/pg_upgrade_logs
+            chown postgres:postgres /tmp/pg_upgrade_logs
+            su -c "cd /tmp/pg_upgrade_logs && /usr/lib/postgresql/$new/bin/pg_upgrade \
+              -b /usr/lib/postgresql/$old/bin \
+              -B /usr/lib/postgresql/$new/bin \
+              -d /var/lib/postgresql/$old/test \
+              -D /var/lib/postgresql/$new/test \
+              -o '-c config_file=/etc/postgresql/$old/test/postgresql.conf' \
+              -O '-c config_file=/etc/postgresql/$new/test/postgresql.conf'" postgres \
+              || { find /tmp/pg_upgrade_logs \
+                        /var/lib/postgresql/$new/test/pg_upgrade_output.d \
+                        -name '*.log' 2>/dev/null | sort | xargs -r tail -n +1; exit 1; }
+            pg_ctlcluster $new test start
+            pg_isready -t 30
+            bin/test_existing run-suite "$DB"
+            old=$new
+          done
+
   # A single stable check name for use as a required status check in branch
   # protection rules. Matrix jobs produce check names like "🐘 PostgreSQL 14"
   # which would all need to be listed individually and updated whenever the
@@ -151,7 +390,7 @@ jobs:
   # (e.g. test, on a docs-only push), and fails if any failed or were
   # cancelled.
   all-checks-passed:
-    needs: [changes, lint, test]
+    needs: [changes, lint, test, extension-update-test, pg-upgrade-stepwise]
     if: always()
     runs-on: ubuntu-latest
     steps:
