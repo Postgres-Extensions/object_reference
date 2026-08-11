@@ -112,12 +112,24 @@ $body$;
  * error, since the view is momentarily gone -- the instant this script drops
  * that view a few statements down. All three are default-enabled (origin),
  * so setting session_replication_role = replica suppresses them for the
- * rest of this transaction -- reverting automatically once the update
- * completes, with no explicit re-enable needed even across the cleanup at
- * the end of this script. A fresh install never hits this: it creates these
- * event triggers only at the very end, once nothing they reference is still
- * being modified.
+ * structural section below.
+ *
+ * This script is not necessarily the only thing running in its transaction
+ * -- ALTER EXTENSION UPDATE can be issued as one statement among several in
+ * a caller-managed transaction -- so session_replication_role cannot simply
+ * be left disturbed for "the rest of the transaction" to sort out, and
+ * whatever it's restored to afterward must be the caller's actual prior
+ * value, not an assumed 'origin' default (the caller may already have it set
+ * to something else for their own reasons). Stashed in a placeholder GUC
+ * (there's no other way to carry a value between separate top-level
+ * statements in a plain multi-statement SQL script -- this isn't a single
+ * PL/pgSQL block) and restored explicitly right after the cleanup at the end
+ * of this script, once every object the event triggers reference is back in
+ * its final, current-source shape. A fresh install never hits this: it
+ * creates these event triggers only at the very end, once nothing they
+ * reference is still being modified.
  */
+SELECT set_config('object_reference.saved_session_replication_role', current_setting('session_replication_role'), true);
 SET LOCAL session_replication_role = replica;
 
 /*
@@ -665,5 +677,12 @@ DROP FUNCTION __object_reference.exec(
   sql text
 );
 DROP SCHEMA __object_reference;
+
+/*
+ * Restore session_replication_role to the caller's actual prior value
+ * (saved near the top of this script), now that the structural section and
+ * its cleanup are both done.
+ */
+SELECT set_config('session_replication_role', current_setting('object_reference.saved_session_replication_role'), true);
 
 -- vi: expandtab sw=2 ts=2
