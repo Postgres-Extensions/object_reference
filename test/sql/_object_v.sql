@@ -6,6 +6,7 @@ SELECT plan(
   0
 
   + 1 -- equality
+  + 2 -- schema-qualification (search_path)
 );
 
 -- TODO: load some damn data first
@@ -15,6 +16,6 @@ SELECT bag_eq(
   , '_object_v__for_update matches _object_v'
 );
 
-\i test/pgxntool/finish.sql
+\i test/finish.sql
 
 -- vi: expandtab sw=2 ts=2

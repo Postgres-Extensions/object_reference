@@ -21,6 +21,7 @@ SELECT plan(
   +2 + 1 -- column drop
   +3 -- table drop
   +3 -- schema drop
+  +2 -- schema-qualification (search_path)
 );
 
 SELECT lives_ok(
@@ -240,6 +241,6 @@ SELECT is(
   , 'objects_view is empty'
 );
 
-\i test/pgxntool/finish.sql
+\i test/finish.sql
 
 -- vi: expandtab sw=2 ts=2

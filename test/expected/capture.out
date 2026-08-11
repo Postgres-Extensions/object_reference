@@ -1,5 +1,5 @@
 \set ECHO none
-1..69
+1..71
 ok 1 - prereq: CREATE DOMAIN "test domain" int
 ok 2 - prereq: CREATE FUNCTION tg_null() RETURNS trigger LANGUAGE plpgsql AS $body$BEGIN RETURN NEW; END$body$
 ok 3 - prereq: CREATE TYPE "test type"
@@ -69,4 +69,6 @@ ok 66 - Drop should fail while reference exists
 ok 67 - DROP table "test table"
 ok 68 - object_group_ids still has correct record count
 ok 69 - No object references remain
+ok 70 - object_reference schema must not be part of the resolved search_path
+ok 71 - _object_reference schema must not be part of the resolved search_path
 # TRANSACTION INTENTIONALLY LEFT OPEN!

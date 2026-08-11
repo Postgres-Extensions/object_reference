@@ -1,5 +1,5 @@
 \set ECHO none
-1..29
+1..31
 ok 1 - Register test table 1
 ok 2 - object_group__create(...) for group name that is too long throws error
 ok 3 - object_group__create('object reference test group')
@@ -29,4 +29,6 @@ ok 26 - Object exists before cleanup test
 ok 27 - Remove from group triggers automatic cleanup attempt
 ok 28 - Object was automatically cleaned up after group removal
 ok 29 - Removing empty group works
+ok 30 - object_reference schema must not be part of the resolved search_path
+ok 31 - _object_reference schema must not be part of the resolved search_path
 # TRANSACTION INTENTIONALLY LEFT OPEN!

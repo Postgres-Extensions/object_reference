@@ -28,6 +28,7 @@ SELECT plan( (
   + c * 2 -- drop
 
   + 1 -- verify object table is now empty
+  + 2 -- schema-qualification (search_path)
 )::int )
   FROM (SELECT count(*) c FROM test_object) c
 ;
@@ -85,6 +86,6 @@ SELECT is_empty(
   , 'No object references remain'
 );
 
-\i test/pgxntool/finish.sql
+\i test/finish.sql
 
 -- vi: expandtab sw=2 ts=2

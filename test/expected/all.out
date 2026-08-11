@@ -1,5 +1,5 @@
 \set ECHO none
-1..73
+1..75
 ok 1 - All object types are being tested.
 ok 2 - Verify object_reference.unsupported()
 ok 3 - prereq: CREATE DOMAIN "test domain" int
@@ -73,4 +73,6 @@ ok 70 - DROP index "test table test index"
 ok 71 - Drop should fail while reference exists
 ok 72 - DROP table "test table"
 ok 73 - No object references remain
+ok 74 - object_reference schema must not be part of the resolved search_path
+ok 75 - _object_reference schema must not be part of the resolved search_path
 # TRANSACTION INTENTIONALLY LEFT OPEN!

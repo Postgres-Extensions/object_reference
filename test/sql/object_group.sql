@@ -42,6 +42,7 @@ SELECT plan(
   +3 + 2  -- __remove
   +4      -- cleanup tests
   +1      -- final group removal (there was always an extra test)
+  +2      -- schema-qualification (search_path)
 );
 
 SELECT lives_ok(
@@ -238,6 +239,6 @@ SELECT lives_ok(
   , 'Removing empty group works'
 );
 
-\i test/pgxntool/finish.sql
+\i test/finish.sql
 
 -- vi: expandtab sw=2 ts=2
