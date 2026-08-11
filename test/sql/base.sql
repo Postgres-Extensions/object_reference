@@ -11,7 +11,7 @@ SELECT plan(
   +2 -- new functions
   +3 -- errors (includes temp object test)
   +1 -- create extensions
-  +1 -- schema-qualification (search_path)
+  +2 -- schema-qualification (search_path)
 );
 
 -- Schema

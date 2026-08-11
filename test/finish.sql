@@ -1,5 +1,5 @@
 /*
- * Asserts object_reference's own schema(s) are absent from the resolved
+ * Asserts object_reference's own schemas are absent from the resolved
  * search_path -- checked here (file end, before finish()) rather than only
  * at setup, so a test that mutates search_path mid-file and never restores
  * it is caught. Not foolproof: mutate-then-restore before this line still
@@ -13,9 +13,16 @@
  * test in the suite passing means nothing accidentally relied on
  * search_path to resolve one of the extension's own objects.
  */
-SELECT ok(
-    NOT ( 'object_reference' = ANY (current_schemas(false)) OR '_object_reference' = ANY (current_schemas(false)) )
-  , 'object_reference schema(s) must not be part of the resolved search_path'
+SELECT set_hasnt(
+    $$ SELECT unnest(current_schemas(false)) $$
+  , $$ VALUES ('object_reference') $$
+  , 'object_reference schema must not be part of the resolved search_path'
+);
+
+SELECT set_hasnt(
+    $$ SELECT unnest(current_schemas(false)) $$
+  , $$ VALUES ('_object_reference') $$
+  , '_object_reference schema must not be part of the resolved search_path'
 );
 
 \i test/pgxntool/finish.sql

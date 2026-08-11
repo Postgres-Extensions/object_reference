@@ -6,7 +6,7 @@ SELECT plan(
   0
 
   + 1 -- equality
-  + 1 -- schema-qualification (search_path)
+  + 2 -- schema-qualification (search_path)
 );
 
 -- TODO: load some damn data first

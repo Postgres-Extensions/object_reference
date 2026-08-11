@@ -1,5 +1,5 @@
 \set ECHO none
-1..43
+1..44
 ok 1 - Register schema-drop test objects
 ok 2 - Create objects_view
 ok 3 - Exactly 3 test view records
@@ -42,5 +42,6 @@ ok 39 - Verify filler column record is deleted
 ok 40 - Verify objects still registered correctly
 ok 41 - Drop schema
 ok 42 - objects_view is empty
-ok 43 - object_reference schema(s) must not be part of the resolved search_path
+ok 43 - object_reference schema must not be part of the resolved search_path
+ok 44 - _object_reference schema must not be part of the resolved search_path
 # TRANSACTION INTENTIONALLY LEFT OPEN!

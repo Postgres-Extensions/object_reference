@@ -42,7 +42,7 @@ SELECT plan(
   +3 + 2  -- __remove
   +4      -- cleanup tests
   +1      -- final group removal (there was always an extra test)
-  +1      -- schema-qualification (search_path)
+  +2      -- schema-qualification (search_path)
 );
 
 SELECT lives_ok(

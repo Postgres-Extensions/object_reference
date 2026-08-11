@@ -21,7 +21,7 @@ SELECT plan(
   +2 + 1 -- column drop
   +3 -- table drop
   +3 -- schema drop
-  +1 -- schema-qualification (search_path)
+  +2 -- schema-qualification (search_path)
 );
 
 SELECT lives_ok(
