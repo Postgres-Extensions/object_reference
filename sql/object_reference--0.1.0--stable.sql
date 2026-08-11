@@ -1,55 +1,8 @@
 /*
- * Hand-authored update script: 0.1.0 (the only real historical PGXN release)
- * -> stable (the current build). Never auto-generated and never touched by
- * the control.mk rule that (re)builds sql/object_reference--stable.sql from
- * sql/object_reference.sql -- see this repo's CLAUDE.md / memory: versioned
- * SQL files are frozen, only sql/object_reference.sql (the source) is edited.
- *
- * Every delta below was found by diffing sql/object_reference--0.1.0.sql
- * against sql/object_reference.sql in full (not by memory of the individual
- * commits that produced them):
- *   - count_nulls dropped as a dependency (object_reference.control's
- *     `requires` no longer lists it); the _object_oid.null_count trigger,
- *     which called count_nulls' not_null_count_trigger(), is removed.
- *   - The reg* pseudotype columns on _object_reference._object_oid
- *     (regclass/regconfig/regdictionary/regnamespace/regoperator/
- *     regprocedure/regtype), plus the now-redundant object_oid column they
- *     used to collapse into (it always equaled objid once there was only
- *     one oid source left), are all dropped; classid changes from regclass
- *     to oid.
- *   - _object_reference._object_v / _object_v__for_update (views) drop the
- *     now-gone reg* columns. CREATE OR REPLACE VIEW cannot drop columns, so
- *     both are DROP+CREATE'd, along with the two functions whose RETURNS
- *     type is _object_reference._object_v (a formal pg_depend edge, not just
- *     a body reference) -- see the "Views + dependent functions" section
- *     below.
- *   - New functions: object_reference.object__describe(),
- *     object__identity(), object__cleanup(), plus a trigger that calls the
- *     latter to auto-clean orphaned objects when removed from a group.
- *   - object__getsert's underlying _object_v__for_update() now refuses to
- *     track objects in temporary schemas (pg_temp%/pg_toast_temp%).
- *   - object_reference.unsupported() additionally excludes "partitioned
- *     table"/"partitioned index" (pg_get_object_address() doesn't recognize
- *     them).
- *   - _tg_capture_safety() gains a trailing RETURN NULL (a trigger function
- *     with a declared return type must return something in every branch).
- *   - Two new utility event-trigger functions, etg_raise__start/__drop, are
- *     added (not wired to any CREATE EVENT TRIGGER -- example/debug use
- *     only, matching the commented-out "snitch" example 0.1.0 had instead).
- *   - _object_oid__add's own bug: 0.1.0 selected `a.subobjid` from
- *     pg_get_object_address(), which only ever has an `objsubid` column
- *     (SQLSTATE 42703 if that branch were ever hit) -- fixed here as part of
- *     recreating the function with its current body.
- *
- * Uses the same private-helper-schema bootstrap/teardown convention as
- * sql/object_reference.sql's own fresh install (__object_reference.exec /
- * safe_dump / create_function), so every function recreated here goes
- * through the exact same REVOKE ALL FROM PUBLIC / GRANT / COMMENT template a
- * fresh install uses -- not hand-written DROP FUNCTION + CREATE FUNCTION +
- * REVOKE/GRANT/COMMENT, which would risk silently diverging from what a
- * fresh install actually produces (a real, verified-clean structural
- * comparison of every recreated function/view against a fresh install of the
- * current version backs this file -- see the containing PR's description).
+ * Uses a private __object_reference schema, mirroring
+ * sql/object_reference.sql's own bootstrap/teardown convention, so every
+ * function recreated here goes through the same REVOKE ALL FROM PUBLIC /
+ * GRANT / COMMENT template a fresh install uses.
  */
 CREATE SCHEMA __object_reference;
 
@@ -152,22 +105,20 @@ END
 $body$;
 
 /*
- * 0.1.0 already installed this extension's own event triggers (they fire on
- * every sql_drop / ddl_command_end in the session, not just DDL a normal user
- * issues), and they stay active for the rest of THIS session while the
- * structural changes below run. zzz__object_reference_drop in particular
- * queries _object_reference._object_v inside its own body, so it would fire
- * -- and error, since the view is momentarily gone -- the instant this script
- * drops that view a few statements down. Disable all three for the structural
- * portion of this script and re-enable them right before the private helper
- * schema teardown, once every object they might touch exists again in its
- * final, current-source shape. A fresh install never hits this: it creates
- * these event triggers only at the very end, once nothing they reference is
- * still being modified.
+ * 0.1.0 already installed this extension's own event triggers, and they
+ * stay active for the rest of THIS session while the structural changes
+ * below run. zzz__object_reference_drop in particular queries
+ * _object_reference._object_v inside its own body, so it would fire -- and
+ * error, since the view is momentarily gone -- the instant this script drops
+ * that view a few statements down. All three are default-enabled (origin),
+ * so setting session_replication_role = replica suppresses them for the
+ * rest of this transaction -- reverting automatically once the update
+ * completes, with no explicit re-enable needed even across the cleanup at
+ * the end of this script. A fresh install never hits this: it creates these
+ * event triggers only at the very end, once nothing they reference is still
+ * being modified.
  */
-ALTER EVENT TRIGGER zzz__object_reference_drop DISABLE;
-ALTER EVENT TRIGGER zzz_object_reference__fix_identity DISABLE;
-ALTER EVENT TRIGGER zzz_object_reference_capture DISABLE;
+SET LOCAL session_replication_role = replica;
 
 /*
  * _object_reference.object: no column changes, just a missing
@@ -694,15 +645,6 @@ $body$
   , 'Begin capturing newly created objects to <object_group_id>. Returns current capture level.'
   , 'object_reference__usage'
 );
-
-/*
- * Re-enable the event triggers disabled near the top of this script, now
- * that every object they reference is back in its final, current-source
- * shape.
- */
-ALTER EVENT TRIGGER zzz__object_reference_drop ENABLE;
-ALTER EVENT TRIGGER zzz_object_reference__fix_identity ENABLE;
-ALTER EVENT TRIGGER zzz_object_reference_capture ENABLE;
 
 /*
  * Drop "temporary" objects -- same convention as the fresh install script.
