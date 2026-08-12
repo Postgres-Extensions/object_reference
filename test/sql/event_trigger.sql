@@ -67,10 +67,6 @@ SELECT is(
   , 'Exactly 1 test view record'
 );
 
-/*
- * s/column_test/column_filler/g
- * Change 1 to 2 in getsert
- */
 SELECT lives_ok(
   $$CREATE TEMP TABLE column_filler AS SELECT * FROM _object_reference._object_v__for_update('table column', 'table_under_test'::regclass, 2)$$
   , $$CREATE TEMP TABLE column_filler AS SELECT * FROM _object_reference._object_v__for_update('table column', 'table_under_test'::regclass, 2)$$

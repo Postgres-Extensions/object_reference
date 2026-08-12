@@ -1572,26 +1572,14 @@ $$);
 
 CREATE EVENT TRIGGER zzz__object_reference_drop
   ON sql_drop
-  /*
-   * For debugging
-   * WHEN tag IN ( 'ALTER TABLE', 'DROP TABLE' )
-   */
   EXECUTE PROCEDURE _object_reference._etg_drop()
 ;
 CREATE EVENT TRIGGER zzz_object_reference__fix_identity
   ON ddl_command_end
-  /*
-   * For debugging
-   * WHEN tag IN ( 'ALTER TABLE', 'DROP TABLE' )
-   */
   EXECUTE PROCEDURE _object_reference._etg_fix_identity()
 ;
 CREATE EVENT TRIGGER zzz_object_reference_capture
   ON ddl_command_end
-  /*
-   * For debugging
-   * WHEN tag IN ( 'ALTER TABLE', 'DROP TABLE' )
-   */
   EXECUTE PROCEDURE _object_reference._etg_capture()
 ;
 
