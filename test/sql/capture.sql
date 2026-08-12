@@ -96,8 +96,10 @@ SELECT is_empty(
 -- Create
 SELECT c.* FROM test_object o, test__create(o) c ORDER BY o.seq ASC;
 
--- Manually register an object; make certain it does not show up in group
--- NOTE! Other tests depend on this working!
+/*
+ * Manually register an object; make certain it does not show up in group
+ * NOTE! Other tests depend on this working!
+ */
 SELECT lives_ok(
   $$CREATE TEMP TABLE ogi__object_id AS
       SELECT object_reference.object__getsert('table', 'object_group_ids', NULL) AS object_id

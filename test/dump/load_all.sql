@@ -52,8 +52,10 @@ SELECT c.* FROM test_object o, test__create(o) c ORDER BY o.seq ASC;
 SELECT c.* FROM test_object o, test__register(o) c ORDER BY o.seq DESC; -- Would be nice to randomize...
 SELECT c.* FROM test_object o, test__verify(o) c ORDER BY o.seq ASC;
 
---SET client_min_messages = DEBUG;
---\i test/pgxntool/finish.sql
+/*
+ * SET client_min_messages = DEBUG;
+ * \i test/pgxntool/finish.sql
+ */
 
 CREATE SCHEMA test_capture_support;
 SET search_path = test_capture_support, tap, public;
