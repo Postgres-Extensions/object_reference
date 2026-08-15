@@ -275,7 +275,7 @@ All line numbers below are from `sql/object_reference.sql` (1610 lines) at this 
 
 The supporting schema (`object`, `_object_oid`, `_sanity()`, the two views) is presented in full in "The core model" above; this section refers to it by line number rather than re-quoting it.
 
-One thing worth flagging here since it affects how the functions below are read: a *function* is also declared with the exact name `_object_reference._object_v__for_update` (lines 835–962, quoted in full just below), distinct from the *view* of the same name (lines 256–270). Postgres allows this because a view and a function live in different system catalogs (`pg_class` vs `pg_proc`); disambiguation is purely syntactic — `FROM _object_reference._object_v__for_update` (no parens, e.g. line 892/905) means the view, while `_object_reference._object_v__for_update(object_type, v_objid, v_subid, object_group_id)` (with parens, line 1161) means the function.
+One thing worth flagging here since it affects how the functions below are read: a *function* is also declared with the exact name `_object_reference._object_v__for_update` (lines 835–962, quoted in full just below), distinct from the *view* of the same name (lines 256–270) — `FROM _object_reference._object_v__for_update` (no parens, e.g. line 892/905) means the view, while `_object_reference._object_v__for_update(object_type, v_objid, v_subid, object_group_id)` (with parens, line 1161) means the function.
 
 ### 1a. `_object_reference._object_v__for_update(object_type, objid, objsubid, object_group_id, class_id)` — the self‑heal engine
 
@@ -931,7 +931,7 @@ SQL function "_repair" statement 1
 
 So: safe under current usage (never re-invoked with a non-empty table), but the call site itself has zero guard against the row-already-exists case — it relies entirely on being called at a moment when the table happens to be empty.
 
-**Line 940 — inside the function `_object_reference._object_v__for_update(object_type, objid, objsubid, object_group_id, class_id)`** (the plpgsql "getsert" core, lines 835–962; this is a *function*, distinct from the *view* of the same name defined at lines 256–270 — no naming conflict since Postgres functions and relations occupy separate namespaces). The call is reached only in the `WHEN NOT r_object_v.ids_exist` branch (lines 926–940), where `r_object_v` was obtained via `_object_reference._object_v__for_update o ... FOR UPDATE OF o` (lines 890–894, re-checked at 903–907 after an `ON CONFLICT DO NOTHING` insert). The `FOR UPDATE OF o` lock on the `_object_reference.object` row serializes concurrent callers of this same getsert path against each other for that `object_id`, so under normal operation (all writers going through `object__getsert`/the event-trigger capture path) this call site is safe. Deleting the `_object_oid` row for `object_id=1` (simulating "restore didn't finish cleanly") and re-running `object__getsert` shows the guarded, successful path:
+**Line 940 — inside the function `_object_reference._object_v__for_update(object_type, objid, objsubid, object_group_id, class_id)`** (the plpgsql "getsert" core, lines 835–962; the function, not the view of the same name at lines 256–270 — see "Write/repair paths: getsert" above). The call is reached only in the `WHEN NOT r_object_v.ids_exist` branch (lines 926–940), where `r_object_v` was obtained via `_object_reference._object_v__for_update o ... FOR UPDATE OF o` (lines 890–894, re-checked at 903–907 after an `ON CONFLICT DO NOTHING` insert). The `FOR UPDATE OF o` lock on the `_object_reference.object` row serializes concurrent callers of this same getsert path against each other for that `object_id`, so under normal operation (all writers going through `object__getsert`/the event-trigger capture path) this call site is safe. Deleting the `_object_oid` row for `object_id=1` (simulating "restore didn't finish cleanly") and re-running `object__getsert` shows the guarded, successful path:
 
 ```
 psql -d oid_audit_r3fixrefs <<'SQL'
@@ -2062,7 +2062,7 @@ object_reference.object__getsert(
 ```
 (it wraps `object__getsert_w_group_id`, which resolves `object_name`/`secondary` to an OID per catalog per the `CASE c_catalog` block at lines 985–1155, then calls `_object_reference._object_v__for_update(object_type, v_objid, v_subid, object_group_id)` at line 1161.)
 
-Actual call output (`object_id` returned by each call), plus the resulting `_object_reference._object_v` rows (`sql/object_reference.sql:242-269`), plus **independent** ground-truth catalog queries (not via the extension) — all three agree exactly, pre-upgrade:
+Actual call output (`object_id` returned by each call), plus the resulting `_object_reference._object_v` rows (`sql/object_reference.sql:242-255`), plus **independent** ground-truth catalog queries (not via the extension) — all three agree exactly, pre-upgrade:
 
 ```
  kind        | object_id | classid_name  | objid | objsubid | independent-oid-query result
@@ -2257,7 +2257,7 @@ So: the first observable symptom of *any* `DROP` statement in this upgraded data
 (Separately, note that `zzz_object_reference__fix_identity` also fires on `ddl_command_end` for *any* DDL, including plain `CREATE TABLE`s unrelated to drops — reproduced too: `CREATE TABLE r7.throwaway(id int);` alone raised the same `invalid input value for enum cat_tools.object_type: "constraint"` error from Finding 1 and was rolled back, before a subsequent `DROP TABLE r7.throwaway;` could even find the table. This is a second, independent way any DDL — not just DROP — breaks post-upgrade with stale rows present.)
 
 ### Files/paths referenced
-- `/root/git/object_reference/sql/object_reference.sql` — lines 193-240 (`_sanity`), 242-269 (`_object_v`/`_object_v__for_update` views), 272-318 (`_object_oid__add`), 323-405 (`fix_refs`, bug at lines 386 & 393), 406-413 (`post_restore`), 416-426 (`_repair`/`_sentry_mv`), 835-962 (`_object_v__for_update`, "ids are out of sync" RAISE at 943), 964-1166 (`object__getsert_w_group_id`), 1168-1201 (`object__getsert` wrappers), 1425-1469 (`_etg_fix_identity`), 1470-1515 (`_etg_drop`), 1571-1588 (event trigger registrations).
+- `/root/git/object_reference/sql/object_reference.sql` — lines 193-240 (`_sanity`), 242-270 (`_object_v`/`_object_v__for_update` views), 272-318 (`_object_oid__add`), 323-405 (`fix_refs`, bug at lines 386 & 393), 406-413 (`post_restore`), 416-426 (`_repair`/`_sentry_mv`), 835-962 (`_object_v__for_update`, "ids are out of sync" RAISE at 943), 964-1166 (`object__getsert_w_group_id`), 1168-1203 (`object__getsert` wrappers), 1425-1469 (`_etg_fix_identity`), 1470-1515 (`_etg_drop`), 1571-1588 (event trigger registrations).
 - `/root/code/extensions/deps/cat_tools/sql/cat_tools--0.3.0.sql` — lines 628-639 (`routine__parse_arg_types`, nested temp-function creation), 748-765 (`regprocedure`).
 - All scratch work was done under `/root/.claude/jobs/e8963d3c/tmp/r7/` (now removed) and `/var/tmp/r7sock` (now removed); the shared 5412/5417 clusters were never touched.
 
