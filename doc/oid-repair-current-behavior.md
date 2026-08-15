@@ -120,8 +120,6 @@ Foreign-key constraints:
     "_object_oid_object_id_fkey" FOREIGN KEY (object_id) REFERENCES _object_reference.object(object_id) ON UPDATE CASCADE ON DELETE CASCADE
 ```
 
-**Reconciliation**: the installed constraint set matches the `CREATE TABLE` source text exactly — same PK (`object_id`), same UNIQUE constraints (`(object_type, object_names, object_args)` on `object`; `(classid, objid, objsubid)` on `_object_oid`), same FK with `ON UPDATE CASCADE ON DELETE CASCADE`. No drift between source and installed reality.
-
 One notable asymmetry visible only in the "Referenced by" section: **only** the FK from `_object_oid` to `object` cascades on delete. The FK from `object_group__object` to `object` is declared statically and inline, in the original `CREATE TABLE _object_reference.object_group__object(...)` statement (lines 540–544: `object_id int NOT NULL REFERENCES _object_reference.object`), the same way `_object_oid`'s FK is declared inline in its own `CREATE TABLE` — it is *not* added dynamically by `object_group__dependency__add`/`object__dependency__add` (grepping the whole file for calls to either function turns up none outside their own `create_function()` definitions at lines 732/751 — they are defined but never invoked by the extension's own install script). Because that inline `REFERENCES` clause carries no `ON DELETE`/`ON UPDATE` clause, it defaults to `NO ACTION`. So deleting a row from `object` today will cascade-delete its `_object_oid` cache row automatically, but will be **blocked by a FK violation** if that `object_id` is still a member of any `object_group`.
 
 ### 3. `_object_reference._sanity()` and the two views
@@ -267,7 +265,7 @@ Empirical confirmation of the 5 reachable rows (scratch DB `oid_audit_r1coremode
          4 | table       | {public,demo_tbl2} | {}          |    1259 | 8675309 | 0        | t        | f      | t
 ```
 
-Also observed, as a side note not part of this assignment: a live `DROP TABLE` on a tracked object (state (t,t,t)) does **not** leave a dangling `object`/`_object_oid` row behind — the `zzz__object_reference_drop` `sql_drop` event trigger (`\dy` shows it, function `_object_reference._etg_drop`) deletes the tracking rows automatically. This is why the `(f,f,t)`/`(f,f,f)` "names broken" states are primarily reachable via direct row manipulation or mid-restore, not via ordinary live DDL — the event-trigger layer (out of scope for this assignment) keeps `object`/`_object_oid` in sync during normal operation.
+A live `DROP TABLE` on a tracked object (state (t,t,t)) does **not** leave a dangling `object`/`_object_oid` row behind — the `zzz__object_reference_drop` `sql_drop` event trigger (`\dy` shows it, function `_object_reference._etg_drop`) deletes the tracking rows automatically. This is why the `(f,f,t)`/`(f,f,f)` "names broken" states are primarily reachable via direct row manipulation or mid-restore, not via ordinary live DDL — the event-trigger layer keeps `object`/`_object_oid` in sync during normal operation.
 
 ---
 
@@ -275,190 +273,9 @@ Also observed, as a side note not part of this assignment: a live `DROP TABLE` o
 
 All line numbers below are from `sql/object_reference.sql` (1610 lines) at this commit (`2ab8876` HEAD).
 
-### Supporting schema objects (needed to read the functions correctly)
+The supporting schema (`object`, `_object_oid`, `_sanity()`, the two views) is presented in full in "The core model" above; this section refers to it by line number rather than re-quoting it.
 
-**`_object_reference.object`** (lines 164–176) — the "identity by name" table:
-```sql
-CREATE TABLE _object_reference.object(
-  object_id       serial                  PRIMARY KEY
-  , object_type   cat_tools.object_type   NOT NULL
---  , original_name text                    NOT NULL
-  , object_names text[]                  NOT NULL
-  , object_args  text[]                  NOT NULL
-  , CONSTRAINT object__u_object_names__object_args UNIQUE( object_type, object_names, object_args )
-  /* EXCLUDED CODE: TODO: this can't be a trigger because some objects won't exist when a dump is loaded
-  , CONSTRAINT object__address_sanity
-    -- pg_get_object_address will throw an error if anything is wrong, so the IS NOT NULL is mostly pointless
-    CHECK( pg_catalog.pg_get_object_address(object_type::text, object_names, object_args) IS NOT NULL )
-    */
-);
-```
-
-**`_object_reference._object_oid`** (lines 181–191) — the "identity by OID" table, FK'd to `object`:
-```sql
-CREATE TABLE _object_reference._object_oid(
-  object_id       int                     PRIMARY KEY REFERENCES _object_reference.object ON DELETE CASCADE ON UPDATE CASCADE
-  , classid       oid                     NOT NULL
-  /* EXCLUDED CODE: TODO: needs to be a trigger
-    CONSTRAINT classid_must_match__object__address_classid
-      CHECK( classid IS NOT DISTINCT FROM cat_tools.object__address_classid(object_type) )
-    */
-  , objid         oid                     NOT NULL
-  , objsubid      int                     NOT NULL
-  , CONSTRAINT object__u_classid__objid__objsubid UNIQUE( classid, objid, objsubid )
-);
-```
-
-**`_object_reference._sanity(obj, id)`** (lines 193–240) — computes `names_ok`, `ids_ok`, `ids_exist` used by both views below:
-```sql
-SELECT __object_reference.create_function(
-  '_object_reference._sanity'
-  , $args$
-  obj _object_reference.object
-  , id _object_reference._object_oid
-  , OUT names_ok boolean
-  , OUT ids_ok boolean
-  , OUT ids_exist boolean
-$args$
-  , 'RECORD LANGUAGE plpgsql STABLE'
-  , $body$
-DECLARE
-  r record;
-BEGIN
-  ASSERT NOT obj IS NULL, 'obj may not be null';
-  ASSERT id IS NULL OR obj.object_id = id.object_id, 'id must be null or object_ids must match';
-
-  ids_exist := NOT (id IS NULL); -- Remember this is NOT the same as id IS NOT NULL!
-
-  BEGIN
-    r := pg_catalog.pg_get_object_address(obj.object_type::text, obj.object_names, obj.object_args);
-    names_ok := true;
-
-    -- Assume that if get_object_address worked then the names are at least valid
-    ids_ok := r IS NOT DISTINCT FROM (id.classid::oid, id.objid, id.objsubid);
-  EXCEPTION
-    WHEN others THEN
-      IF
-        SQLSTATE IN(
-          '22023' -- invalid_parameter_value
-          , '3F000' -- invalid_schema_name
-          , '42703' -- undefined_column
-          , '42704' -- undefined_object
-          , '42883' -- undefined_function
-        )
-        OR SQLSTATE LIKE '42P%' -- Matches a bunch of codes, including undefined_* and invalid_*_definition
-      THEN
-        names_ok := false;
-        ids_ok := false; -- Should we see if pg_object_identity_as_address works??
-      ELSE
-        RAISE WARNING 'Unexpected error!!';
-        RAISE; -- Unexpected, so re-raise
-      END IF;
-  END;
-END
-$body$
-  , 'Check the sanity of object and _object_oid'
-);
-```
-Note `ids_ok` can only be `true` when `id` (i.e. `ids_exist`) is non‑null and matches the freshly resolved address — so `ids_ok=true ⇒ ids_exist=true` always. This matters for the branch‑coverage analysis of `_object_v__for_update` below.
-
-**Views `_object_reference._object_v`** (lines 242–255) and **`_object_reference._object_v__for_update`** (lines 256–270):
-```sql
-CREATE VIEW _object_reference._object_v AS
-  SELECT 
-      o.object_id
-      , o.object_type
-      , o.object_names
-      , o.object_args
-      , i.classid
-      , i.objid
-      , i.objsubid
-      , s.*
-    FROM _object_reference.object o
-      LEFT JOIN _object_reference._object_oid i USING(object_id)
-      , _object_reference._sanity(o, i) s
-;
-CREATE VIEW _object_reference._object_v__for_update AS
-  SELECT 
-      o.object_id
-      , o.object_type
-      , o.object_names
-      , o.object_args
-      , i.classid
-      , i.objid
-      , i.objsubid
-      , s.*
-    FROM _object_reference.object o
-      LEFT JOIN _object_reference._object_oid i USING(object_id)
-      , _object_reference._sanity(o, i) s
-    FOR UPDATE OF o
-;
-```
-The only functional difference between the two views is `FOR UPDATE OF o` on the second — it locks the `_object_reference.object` row while it's read, which is exactly what's needed inside the getsert path to avoid two concurrent transactions both deciding to insert.
-
-**IMPORTANT / easy to misread**: a function is *also* declared with the exact name `_object_reference._object_v__for_update` (lines 835–962, quoted in full below). PostgreSQL allows a relation (view) and a function to share a schema-qualified name because they live in different system catalogs (`pg_class` vs `pg_proc`); disambiguation is purely syntactic — `FROM _object_reference._object_v__for_update` (no parens, e.g. line 892/905) means the **view**, while `_object_reference._object_v__for_update(object_type, v_objid, v_subid, object_group_id)` (with parens, line 1161) means the **function**. Verified live:
-```
-psql> \dv _object_reference._object_v__for_update
- Schema             | Name                  | Type | Owner
- _object_reference  | _object_v__for_update | view | root
-
-psql> \df _object_reference._object_v__for_update
- Schema            | Name                  | Result data type          | Argument data types                                                                                       | Type
- _object_reference | _object_v__for_update | _object_reference._object_v | object_type cat_tools.object_type, objid oid, objsubid integer, object_group_id integer DEFAULT NULL::integer, class_id regclass DEFAULT NULL::regclass | func
-```
-
-**`_object_reference._object_oid__add`** (lines 272–318) — called by the self-heal function to insert the missing `_object_oid` row:
-```sql
-SELECT __object_reference.create_function(
-  '_object_reference._object_oid__add'
-  , $args$
-  object_id _object_reference._object_oid.object_id%TYPE
-  , object_type _object_reference.object.object_type%TYPE DEFAULT NULL
-  , classid _object_reference._object_oid.classid%TYPE DEFAULT NULL
-  , objid _object_reference._object_oid.objid%TYPE DEFAULT NULL
-  , objsubid _object_reference._object_oid.objsubid%TYPE DEFAULT NULL
-$args$
-  , '_object_reference._object_v LANGUAGE plpgsql'
-  , $body$
-DECLARE
-  r_object_v _object_reference._object_v;
-BEGIN
-  IF object_type IS NULL THEN
-    -- Should definitely exist
-    SELECT INTO STRICT object_type, classid, objid, objsubid
-        o.object_type, a.classid, a.objid, a.objsubid
-      FROM _object_reference.object o
-        , pg_catalog.pg_get_object_address(o.object_type::text, o.object_names, o.object_args) a
-      WHERE o.object_id = _object_oid__add.object_id
-    ;
-  END IF;
-  BEGIN
-    INSERT INTO _object_reference._object_oid(object_id, classid, objid, objsubid)
-      VALUES (object_id, classid, objid, objsubid);
-
-    SELECT INTO STRICT r_object_v -- Record better exist!
-        *
-      FROM _object_reference._object_v__for_update o
-      WHERE o.object_id = _object_oid__add.object_id
-    ;
-  END;
-
-  IF NOT r_object_v.ids_ok THEN
-    RAISE 'id mismatch for object_id %', object_id
-      USING
-        DETAIL = '_object_reference._object_v = ' || pg_catalog.row_to_json(r_object_v)
-        , HINT = 'this should not be possible'
-    ;
-  END IF;
-
-  RETURN r_object_v;
-END
-$body$
-  , 'Check the sanity of object and _object_oid'
-);
-```
-
----
+One thing worth flagging here since it affects how the functions below are read: a *function* is also declared with the exact name `_object_reference._object_v__for_update` (lines 835–962, quoted in full just below), distinct from the *view* of the same name (lines 256–270). Postgres allows this because a view and a function live in different system catalogs (`pg_class` vs `pg_proc`); disambiguation is purely syntactic — `FROM _object_reference._object_v__for_update` (no parens, e.g. line 892/905) means the view, while `_object_reference._object_v__for_update(object_type, v_objid, v_subid, object_group_id)` (with parens, line 1161) means the function.
 
 ### 1a. `_object_reference._object_v__for_update(object_type, objid, objsubid, object_group_id, class_id)` — the self‑heal engine
 
@@ -942,7 +759,7 @@ $body$
 
 **Trace of what they touch**: Both are plain single-statement SQL functions that read **only** `_object_reference._object_oid` directly (`FROM _object_reference._object_oid o WHERE o.object_id = $1`), then feed its `classid`/`objid`/`objsubid` columns straight to the built-in catalog functions `pg_catalog.pg_describe_object()` / `pg_catalog.pg_identify_object()`. Neither touches `_object_reference.object`, `_object_reference._object_v`, `_object_reference._object_v__for_update` (view or function), or `_object_reference._sanity()` in any way — no self-heal logic is invoked, and no row is ever inserted or updated by either call. If there is no matching row in `_object_oid` for the given `object_id` (whether because it was never tracked, or its `_object_oid` row was deleted/never created), the `FROM`/`WHERE` produces zero rows and the function simply returns `NULL` (for `object__describe`, a scalar `text`) or a single all-NULL record (for `object__identity`, since it's declared as a non-SETOF `record`-returning SQL function called in a scalar context) — it does **not** raise an error and does **not** attempt to create/repair anything.
 
-**Empirical confirmation** (scratch DB `oid_audit_r2gs`, PG17):
+Demonstration:
 
 ```
 CREATE TABLE demo_tbl(id int primary key, name text);
@@ -996,7 +813,7 @@ Row for `object_id=2` stayed missing — confirming `object__describe`/`object__
          1 |    1259 | 27812 |        0
          2 |    1255 | 27819 |        0
 ```
-Also empirically confirmed the `NOT ids_exist` self-heal WARNING for the table object (`object_id=1`): after `DELETE FROM _object_reference._object_oid WHERE object_id = 1;` and re-calling `object_reference.object__getsert('table', 'demo_tbl')`, stderr showed exactly the code path predicted:
+The `NOT ids_exist` self-heal branch's `WARNING` is likewise observable directly: after `DELETE FROM _object_reference._object_oid WHERE object_id = 1;` and re-calling `object_reference.object__getsert('table', 'demo_tbl')`:
 ```
 WARNING:  missing record in _object_reference._object_oid for object_id 1
 HINT:  This indicates a restore did not finish cleanly.
@@ -1005,15 +822,9 @@ and the row was silently recreated (`object__getsert` still returned `1`, no err
 
 ---
 
-### Environment note
-
-The task brief stated `object_reference`/`cat_tools`/`count_nulls` were already built and installed system-wide in both clusters; in this sandbox they were **not** actually present under `/usr/share/postgresql/{12,17}/extension/` — `CREATE EXTENSION object_reference CASCADE;` initially failed with "extension is not available". I built and installed `cat_tools`, `count_nulls`, and `object_reference` (`make install`, from `/root/code/extensions/deps/cat_tools`, `/root/code/extensions/deps/count_nulls`, and `/root/git/object_reference` respectively) for PG17 only, to reproduce the behavior above; PG12 was left untouched since all reproduction was done on the default PG17/5417 cluster. Scratch database `oid_audit_r2gs` was dropped after use; no files were written into `/root/git/object_reference` (the `make install` for `object_reference` did clone `.vendor/linter` as a git submodule checkout, which is a build/tooling side effect, not a source-tree edit).
-
----
-
 ## `_object_oid__add()`, `fix_refs()`, and `post_restore()` in `sql/object_reference.sql`
 
-All line numbers below are from `sql/object_reference.sql` in this checkout (identical to upstream `master`, 1610 lines total), verified directly by reading the file. All reproductions were run against a scratch database `oid_audit_r3fixrefs` on the PG17/5417 cluster (`object_reference CASCADE` extension, freshly installed from this exact checkout); the database has since been dropped.
+All line numbers below are from `sql/object_reference.sql` in this checkout (identical to upstream `master`, 1610 lines total).
 
 ### 1. `_object_reference._object_oid__add()` — complete body (lines 272–318)
 
@@ -1106,7 +917,7 @@ grep -n "_object_oid__add(" sql/object_reference.sql
 
 **Line 376 — inside `_object_reference.fix_refs()`, `WHEN NOT r_object_v.ids_exist THEN` branch, `IF warning_only THEN`.** `r_object_v` here comes from an un-locked `FOR r_object_v IN SELECT * FROM _object_reference._object_v LOOP` (line 331–332), and the call is only reached when that same row's `ids_exist` was just observed to be `false` (line 373: `WHEN NOT r_object_v.ids_exist THEN`). So *within this loop iteration* it's guarded — reproduced by deleting the `_object_oid` row for `object_id=1` and re-running `object__getsert`, which goes through the analogous guarded path and succeeds cleanly (warning + successful add, no duplicate-key error — see below). However this specific `fix_refs` call site is **not immune to a genuine TOCTOU race**: the driving `SELECT * FROM _object_reference._object_v` (line 332) takes no lock, so if a concurrent session inserts an `_object_oid` row for the same `object_id` between that `SELECT` and this `PERFORM`, the duplicate-key error from claim 1 would surface here. Given `fix_refs()`/`post_restore()` are meant to run once, after a restore, before normal traffic resumes, this is a narrow window in practice but the code does not itself prevent it.
 
-**Line 420 — inside `_object_reference._repair()`** (`'SELECT count(*) AS objects FROM _object_reference.object, _object_reference._object_oid__add(object_id)'`, lines 416–423). This is an implicit cross join that calls `_object_oid__add(object_id)` for **every row** in `_object_reference.object`, completely unconditionally — no filter on whether that `object_id` already has an `_object_oid` row. This call site is **not guarded at all**. It is only safe today because `_repair()` is invoked exactly once, automatically, at line 425 (`CREATE MATERIALIZED VIEW _object_reference._sentry_mv AS SELECT _object_reference._repair();`), which runs during `CREATE EXTENSION` at a point in the install script where `_object_reference.object` is guaranteed to still be empty — because `CREATE EXTENSION` executes the script's top-level statements strictly in order, and no top-level DML against `_object_reference.object` appears anywhere before line 425. (The `INSERT INTO _object_reference.object` at line 898 is not itself a top-level statement executed in script order; it is embedded text inside the `$body$` of the `CREATE FUNCTION`-equivalent call defining `_object_reference._object_v__for_update` at lines 835–962, and only runs later, at runtime, whenever some session calls that function — its physical line number carries no information about execution order relative to line 425.) There is no `REFRESH MATERIALIZED VIEW` anywhere in the file, and `_repair()` is never called anywhere else. I confirmed this danger empirically by calling `_repair()` manually against the scratch DB after it already had a fully-populated object (`object_id=1` with an existing `_object_oid` row):
+**Line 420 — inside `_object_reference._repair()`** (`'SELECT count(*) AS objects FROM _object_reference.object, _object_reference._object_oid__add(object_id)'`, lines 416–423). This is an implicit cross join that calls `_object_oid__add(object_id)` for **every row** in `_object_reference.object`, completely unconditionally — no filter on whether that `object_id` already has an `_object_oid` row. This call site is **not guarded at all**. It is only safe today because `_repair()` is invoked exactly once, automatically, at line 425 (`CREATE MATERIALIZED VIEW _object_reference._sentry_mv AS SELECT _object_reference._repair();`), which runs during `CREATE EXTENSION` at a point in the install script where `_object_reference.object` is guaranteed to still be empty — because `CREATE EXTENSION` executes the script's top-level statements strictly in order, and no top-level DML against `_object_reference.object` appears anywhere before line 425. (The `INSERT INTO _object_reference.object` at line 898 is not itself a top-level statement executed in script order; it is embedded text inside the `$body$` of the `CREATE FUNCTION`-equivalent call defining `_object_reference._object_v__for_update` at lines 835–962, and only runs later, at runtime, whenever some session calls that function — its physical line number carries no information about execution order relative to line 425.) There is no `REFRESH MATERIALIZED VIEW` anywhere in the file, and `_repair()` is never called anywhere else. Calling `_repair()` manually against a database that already has a fully-populated object (`object_id=1` with an existing `_object_oid` row) demonstrates the danger directly:
 
 ```
 psql -d oid_audit_r3fixrefs -c "SELECT _object_reference._repair();"
@@ -1120,7 +931,7 @@ SQL function "_repair" statement 1
 
 So: safe under current usage (never re-invoked with a non-empty table), but the call site itself has zero guard against the row-already-exists case — it relies entirely on being called at a moment when the table happens to be empty.
 
-**Line 940 — inside the function `_object_reference._object_v__for_update(object_type, objid, objsubid, object_group_id, class_id)`** (the plpgsql "getsert" core, lines 835–962; this is a *function*, distinct from the *view* of the same name defined at lines 256–270 — no naming conflict since Postgres functions and relations occupy separate namespaces). The call is reached only in the `WHEN NOT r_object_v.ids_exist` branch (lines 926–940), where `r_object_v` was obtained via `_object_reference._object_v__for_update o ... FOR UPDATE OF o` (lines 890–894, re-checked at 903–907 after an `ON CONFLICT DO NOTHING` insert). The `FOR UPDATE OF o` lock on the `_object_reference.object` row serializes concurrent callers of this same getsert path against each other for that `object_id`, so under normal operation (all writers going through `object__getsert`/the event-trigger capture path) this call site is safe. I reproduced the guarded, successful path empirically: deleted the `_object_oid` row for `object_id=1` (simulating "restore didn't finish cleanly") and re-ran `object__getsert`:
+**Line 940 — inside the function `_object_reference._object_v__for_update(object_type, objid, objsubid, object_group_id, class_id)`** (the plpgsql "getsert" core, lines 835–962; this is a *function*, distinct from the *view* of the same name defined at lines 256–270 — no naming conflict since Postgres functions and relations occupy separate namespaces). The call is reached only in the `WHEN NOT r_object_v.ids_exist` branch (lines 926–940), where `r_object_v` was obtained via `_object_reference._object_v__for_update o ... FOR UPDATE OF o` (lines 890–894, re-checked at 903–907 after an `ON CONFLICT DO NOTHING` insert). The `FOR UPDATE OF o` lock on the `_object_reference.object` row serializes concurrent callers of this same getsert path against each other for that `object_id`, so under normal operation (all writers going through `object__getsert`/the event-trigger capture path) this call site is safe. Deleting the `_object_oid` row for `object_id=1` (simulating "restore didn't finish cleanly") and re-running `object__getsert` shows the guarded, successful path:
 
 ```
 psql -d oid_audit_r3fixrefs <<'SQL'
@@ -1246,7 +1057,7 @@ The last `CASE` arm (`WHEN r_object_v.ids_exist THEN`, lines 384–399, the "ext
 
 #### Claim: this branch itself errors instead of raising the intended diagnostic — CONFIRMED
 
-To reach this exact branch (`names_ok = true`, `ids_ok = false`, `ids_exist = true`), I crafted that state directly: registered `public.widget` normally (getting consistent `names_ok=t, ids_ok=t, ids_exist=t`), then corrupted the stored `objid` in `_object_reference._object_oid` so it no longer matches what `pg_get_object_address()` currently returns for that object, while names still resolve fine:
+Reaching this exact branch (`names_ok = true`, `ids_ok = false`, `ids_exist = true`) requires crafting that state directly: register `public.widget` normally (giving consistent `names_ok=t, ids_ok=t, ids_exist=t`), then corrupt the stored `objid` in `_object_reference._object_oid` so it no longer matches what `pg_get_object_address()` currently returns for that object, while names still resolve fine:
 
 ```
 psql -d oid_audit_r3fixrefs <<'SQL'
@@ -1278,7 +1089,7 @@ QUERY:  r_object.object_id
 CONTEXT:  PL/pgSQL function _object_reference.fix_refs(boolean) line 67 at RAISE
 ```
 
-I confirmed the reported PL/pgSQL body line numbers (60 and 67, counted from `DECLARE` at the start of the function body) map exactly to source lines 386 and 393 respectively via a local offset count. Claim confirmed: both the `warning_only := true` (intended: `RAISE WARNING`) and `warning_only := false` (intended: `RAISE` as a hard error with a diagnostic message) sub-branches fail with an unrelated `42P01`/"missing FROM-clause entry" PL/pgSQL compile-time-resolved error referencing the undeclared identifier `r_object`, instead of producing the branch's own intended diagnostic message ("extraneous ID information for object_id %"). The diagnostic content (`DETAIL`/`HINT` mentioning `r_object_v`) never gets emitted at all in this branch — the `RAISE` statement fails before producing any output.
+The reported PL/pgSQL body line numbers (60 and 67, counted from `DECLARE` at the start of the function body) map to source lines 386 and 393 respectively. Both the `warning_only := true` (intended: `RAISE WARNING`) and `warning_only := false` (intended: `RAISE` as a hard error with a diagnostic message) sub-branches fail with an unrelated `42P01`/"missing FROM-clause entry" PL/pgSQL compile-time-resolved error referencing the undeclared identifier `r_object`, instead of producing the branch's own intended diagnostic message ("extraneous ID information for object_id %"). The diagnostic content (`DETAIL`/`HINT` mentioning `r_object_v`) never gets emitted at all in this branch — the `RAISE` statement fails before producing any output.
 
 ### 3. `object_reference.post_restore()` — complete body (lines 406–413)
 
@@ -1297,14 +1108,12 @@ Relationship to `fix_refs()`: `post_restore()` is a one-line `SQL`-language, `SE
 
 Granted to `object_reference__usage` (line 412), i.e. it's callable by any role granted that usage role — it is the extension's supported/public entry point (unlike `_object_reference.fix_refs()` itself, which lives in the `_object_reference` schema and is not separately exposed with a grant here).
 
-When a human/DBA is expected to call it: `post_restore()`'s own comment (line 411, `'Ensures all object references are correct after a restore.'`) and the "normal condition during a restore" comment inside `fix_refs()` (line 375) both indicate it's meant to be run **manually, once, after restoring a `pg_dump` of a database that has this extension installed** — because a restore reloads `_object_reference.object`'s rows via `COPY`/`INSERT` (extension-config-dumped data) but the OIDs in `_object_oid` refer to catalog objects that get new OIDs on restore (or may not exist yet mid-restore), so `_object_oid` needs to be rebuilt/verified against the freshly-restored catalog once the restore is complete. This matches the DBA-facing docs pattern; I did not find any place in the file where `object_reference.post_restore()` is invoked automatically — the only unconditional automatic caller of `fix_refs()` I found in the file is the `_etg_drop()` event-trigger function (lines 1470–1515), which calls `PERFORM object_reference.post_restore();` at line 1511 unconditionally at the end of every `sql_drop` event (event trigger `zzz__object_reference_drop`, created at lines 1571–1576), with the comment (lines 1506–1510) *"We know that a restore will never drop objects, so force `_object_v` to be correct at this point."* That is a different code path from a human explicitly calling `post_restore()` post-restore, but it is worth noting because it means `fix_refs(false)`'s strict-mode error behavior (and the confirmed `r_object` bug) is also reachable automatically any time a tracked object is dropped and the extension's bookkeeping happens to be in one of the erroring states at that moment — not only when a DBA manually invokes `post_restore()` after a `pg_restore`.
+When a human/DBA is expected to call it: `post_restore()`'s own comment (line 411, `'Ensures all object references are correct after a restore.'`) and the "normal condition during a restore" comment inside `fix_refs()` (line 375) both indicate it's meant to be run **manually, once, after restoring a `pg_dump` of a database that has this extension installed** — because a restore reloads `_object_reference.object`'s rows via `COPY`/`INSERT` (extension-config-dumped data) but the OIDs in `_object_oid` refer to catalog objects that get new OIDs on restore (or may not exist yet mid-restore), so `_object_oid` needs to be rebuilt/verified against the freshly-restored catalog once the restore is complete. No place in the file invokes `object_reference.post_restore()` automatically — the only unconditional automatic caller of `fix_refs()` is the `_etg_drop()` event-trigger function (lines 1470–1515), which calls `PERFORM object_reference.post_restore();` at line 1511 unconditionally at the end of every `sql_drop` event (event trigger `zzz__object_reference_drop`, created at lines 1571–1576), with the comment (lines 1506–1510) *"We know that a restore will never drop objects, so force `_object_v` to be correct at this point."* That is a different code path from a human explicitly calling `post_restore()` post-restore, but it is worth noting because it means `fix_refs(false)`'s strict-mode error behavior (and the confirmed `r_object` bug) is also reachable automatically any time a tracked object is dropped and the extension's bookkeeping happens to be in one of the erroring states at that moment — not only when a DBA manually invokes `post_restore()` after a `pg_restore`.
 
 ### Verdicts
 
 1. **Claim (no `ON CONFLICT`, duplicate-key error on repeat `_object_oid__add()`): CONFIRMED**, with real `ERROR: duplicate key value violates unique constraint "_object_oid_pkey"` reproduced twice. Of the three call sites, line 940 is safe by construction (row-locked check just before), line 376 is guarded per-iteration but the driving `SELECT` is unlocked (theoretical concurrent-write race), and line 420 (`_repair()`) has no guard at all and is safe today purely because it's only ever invoked once, automatically, against a table proven empty by script ordering — reproduced the actual failure by calling `_repair()` manually against a non-empty table.
 2. **Claim (the "extraneous ID information" branch references undeclared `r_object` instead of `r_object_v`, making the branch itself error): CONFIRMED** at both source lines 386 and 393, for both `warning_only = true` and `warning_only = false`. Reproduced by crafting a `names_ok=t, ids_ok=f, ids_exist=t` row state and calling `fix_refs()`, which produced `ERROR: missing FROM-clause entry for table "r_object"` in both cases instead of the intended "extraneous ID information for object_id %" diagnostic.
-
-Scratch database `oid_audit_r3fixrefs` has been dropped; no files were left under `/root/git/object_reference`.
 
 ---
 
@@ -1393,7 +1202,7 @@ END
 $body$;
 ```
 
-It is a thin wrapper around `pg_catalog.pg_extension_config_dump(regclass, text)` — a function that only succeeds when called with `current_setting('extension_name')` set, i.e. during `CREATE EXTENSION`/`ALTER EXTENSION`/extension-script execution. If called outside that context (`feature_not_supported`), it swallows the error and turns it into a `WARNING` — a deliberate, blunt guard rail against ever loading this file as plain SQL/psql (reinforced by the `\quit` banner at lines 1–3). `safe_dump` itself is a temporary helper: it, `__object_reference.exec()`, and `__object_reference.create_function()` are all `DROP FUNCTION`ed at lines 1593–1607, and `__object_reference` schema itself is `DROP SCHEMA`ed at line 1608, at the very end of the install script — none of it persists after `CREATE EXTENSION` finishes. (Confirmed live: after `CREATE EXTENSION object_reference CASCADE`, `'__object_reference.safe_dump'::regprocedure` no longer resolves — the schema is gone.)
+It is a thin wrapper around `pg_catalog.pg_extension_config_dump(regclass, text)` — a function that only succeeds when called with `current_setting('extension_name')` set, i.e. during `CREATE EXTENSION`/`ALTER EXTENSION`/extension-script execution. If called outside that context (`feature_not_supported`), it swallows the error and turns it into a `WARNING` — a deliberate, blunt guard rail against ever loading this file as plain SQL/psql (reinforced by the `\quit` banner at lines 1–3). `safe_dump` itself is a temporary helper: it, `__object_reference.exec()`, and `__object_reference.create_function()` are all `DROP FUNCTION`ed at lines 1593–1607, and `__object_reference` schema itself is `DROP SCHEMA`ed at line 1608, at the very end of the install script — none of it persists after `CREATE EXTENSION` finishes. (After `CREATE EXTENSION object_reference CASCADE`, `'__object_reference.safe_dump'::regprocedure` no longer resolves — the schema is gone.)
 
 **The `_sentry_mv` definition (lines 425–426):**
 
@@ -1402,7 +1211,7 @@ It is a thin wrapper around `pg_catalog.pg_extension_config_dump(regclass, text)
 426  SELECT __object_reference.safe_dump('_object_reference._sentry_mv');
 ```
 
-Confirmed live (`\d+ _object_reference._sentry_mv`):
+`\d+ _object_reference._sentry_mv` on a live install:
 ```
 Materialized view "_object_reference._sentry_mv"
  Column  |  Type  | ...
@@ -1429,7 +1238,7 @@ REFRESH MATERIALIZED VIEW _object_reference._sentry_mv;
 
 ### 3. Section placement: `REFRESH MATERIALIZED VIEW` vs. table data vs. `CREATE EXTENSION`/event triggers
 
-PostgreSQL's `pg_dump`/`pg_restore` archive divides work into three ordered sections — pre-data, data, post-data — and `pg_restore --list --section=<name>` (documented under `pg_restore`'s `--section` option in the PostgreSQL docs) reports exactly which TOC entries fall in each. I verified this directly rather than trusting a description, using a scratch database (`oid_audit_r4dump`) with the extension installed and real rows in every one of its config-dumped relations (`object`, `object_group`, `object_group__object`, plus a captured user table).
+PostgreSQL's `pg_dump`/`pg_restore` archive divides work into three ordered sections — pre-data, data, post-data — and `pg_restore --list --section=<name>` (documented under `pg_restore`'s `--section` option in the PostgreSQL docs) reports exactly which TOC entries fall in each, demonstrated below against a database with the extension installed and real rows in every one of its config-dumped relations (`object`, `object_group`, `object_group__object`, plus a captured user table).
 
 `pg_restore --list --section=pre-data` on the resulting custom-format dump:
 ```
@@ -1462,9 +1271,9 @@ PostgreSQL's `pg_dump`/`pg_restore` archive divides work into three ordered sect
 
 So: **`CREATE EXTENSION object_reference` is pre-data** (runs first, restores the schema/functions/tables with empty state); **all `TABLE DATA` COPY statements and `SEQUENCE SET` are the `data` section** (run second, restore rows including the durable `_object_reference.object`/`object_group`/`object_group__object` contents); and **the `REFRESH MATERIALIZED VIEW _object_reference._sentry_mv` (`MATERIALIZED VIEW DATA` TOC entry) is `post-data`** (runs last, by which point both `CREATE EXTENSION` and every table's data are already in place — a hard requirement, since `_repair()` reads from `_object_reference.object` and calls `pg_get_object_address()` against objects that must already exist).
 
-**Independent confirmation that `CREATE EVENT TRIGGER` is always `SECTION_POST_DATA`, including under `--binary-upgrade`:**
+**`CREATE EVENT TRIGGER` is always `SECTION_POST_DATA`, including under `--binary-upgrade`:**
 
-I added a standalone (non-extension-owned) event trigger to the scratch database and re-checked:
+Adding a standalone (non-extension-owned) event trigger to the same database:
 
 ```
 $ pg_restore --list --section=post-data dump2.custom | grep "EVENT TRIGGER"
@@ -1473,7 +1282,7 @@ $ pg_restore --list --section=pre-data dump2.custom | grep "EVENT TRIGGER"   # (
 $ pg_restore --list --section=data dump2.custom | grep "EVENT TRIGGER"       # (no output)
 ```
 
-I then re-ran with `pg_dump --binary-upgrade` (the internal flag `pg_upgrade` itself uses, which dumps every object — including objects that are normally members of an extension, like `object_reference`'s own three event triggers created at lines 1570–1588 — as individually-scripted TOC entries rather than folding them into the opaque `EXTENSION` entry):
+Re-running with `pg_dump --binary-upgrade` (the internal flag `pg_upgrade` itself uses, which dumps every object — including objects that are normally members of an extension, like `object_reference`'s own three event triggers created at lines 1570–1588 — as individually-scripted TOC entries rather than folding them into the opaque `EXTENSION` entry):
 
 ```
 $ pg_restore --list --section=post-data dump_bu.custom | grep -E "EVENT TRIGGER|MATERIALIZED"
@@ -1487,7 +1296,7 @@ $ pg_restore --list --section=data dump_bu.custom | grep -E "EVENT TRIGGER|MATER
 $ pg_restore --list --section=pre-data dump_bu.custom | grep -E "EVENT TRIGGER|MATERIALIZED" # (no output)
 ```
 
-(the bare matview *definition*, as opposed to its refresh/"data", does show up in pre-data as TOC entry `242; 1259 31413 MATERIALIZED VIEW _object_reference _sentry_mv` — expected, since a matview's structure is pre-data like a table's, only its "data"/refresh is post-data.) This confirms, empirically and under `--binary-upgrade` specifically (not just the documentation), that every `CREATE EVENT TRIGGER` — both the extension's own three and a standalone one — lands in `SECTION_POST_DATA`, alongside (and, by TOC ordering, generally after) the `_sentry_mv` refresh.
+(the bare matview *definition*, as opposed to its refresh/"data", does show up in pre-data as TOC entry `242; 1259 31413 MATERIALIZED VIEW _object_reference _sentry_mv` — a matview's structure is pre-data like a table's; only its "data"/refresh is post-data.) So every `CREATE EVENT TRIGGER` — both the extension's own three and a standalone one — lands in `SECTION_POST_DATA` under `--binary-upgrade` too, alongside (and, by TOC ordering, generally after) the `_sentry_mv` refresh.
 
 **Net ordering for a restore of this extension: `CREATE EXTENSION` (pre-data) → table/sequence data restored (data) → `_sentry_mv` refreshed / `_repair()` runs, and any event triggers (re)created (post-data).**
 
@@ -1557,13 +1366,11 @@ This shows two different failure modes stemming from the missing `safe_dump()` c
    ```
    (`object_group_id_seq`'s `nextval()` produces `1`, which the table already contains from the restored data, since only `object_group.object_group_id serial`'s underlying table data survived, not its sequence position.)
 
-2. **`_object_reference._object_oid` has 0 rows immediately after `CREATE EXTENSION`/before post-data runs**, and is *not itself* restored from dump data at all (no `TABLE DATA _object_reference _object_oid` entry appears anywhere in any TOC I captured). Its 3 rows present in the final restored database above exist *only* because the post-data `REFRESH MATERIALIZED VIEW _object_reference._sentry_mv` executed `_repair()`, which rebuilt them from scratch by re-deriving fresh OIDs via `pg_get_object_address()` against `_object_reference.object` (which *is* durable/dumped). This is expected/by-design (`_object_oid` holds OIDs that are inherently dump-invalid — see §1), but it is worth stating plainly per the task: **`_object_oid`'s pre-restore data (the OIDs as they existed in the source database) does not survive a logical dump/restore at all — only `CREATE EXTENSION`'s fresh (empty) table plus a post-restore `_repair()` recomputation determines its restored contents.**
+2. **`_object_reference._object_oid` has 0 rows immediately after `CREATE EXTENSION`/before post-data runs**, and is *not itself* restored from dump data at all (no `TABLE DATA _object_reference _object_oid` entry appears anywhere in any TOC). Its 3 rows present in the final restored database above exist *only* because the post-data `REFRESH MATERIALIZED VIEW _object_reference._sentry_mv` executed `_repair()`, which rebuilt them from scratch by re-deriving fresh OIDs via `pg_get_object_address()` against `_object_reference.object` (which *is* durable/dumped). This is expected/by-design (`_object_oid` holds OIDs that are inherently dump-invalid — see §1): **`_object_oid`'s pre-restore data (the OIDs as they existed in the source database) does not survive a logical dump/restore at all — only `CREATE EXTENSION`'s fresh (empty) table plus a post-restore `_repair()` recomputation determines its restored contents.**
 
 All other extension-owned relations (`_object_reference.object`, `object_object_id_seq`, `_sentry_mv`, `object_group`, `object_group__object`) are covered by `safe_dump()` and their data was confirmed present, correct, and complete in the restored database above.
 
 ---
-
-**Scratch artifacts** (for reference, not part of the deliverable): dumps/TOC listings/plain-SQL dump used for this investigation are in `/root/.claude/jobs/e8963d3c/tmp/r4-repair-sentry-dump/` (`dump.custom`, `dump2.custom`, `dump3.custom`, `dump_bu.custom`, `toc.txt`, `dump.sql`). All scratch databases (`oid_audit_r4dump`, `oid_audit_r4dump_restored`, `oid_audit_r4dump_restored2`, `oid_audit_r4_verify`) were dropped after use; the shared PG12/PG17 clusters were not otherwise touched.
 
 ---
 
@@ -1854,8 +1661,6 @@ SELECT * FROM pg_catalog.pg_identify_object_as_address(1259, 999999999, 0);
 
 In neither case does the handler no-op or guard itself — there is no code path in `_etg_fix_identity()` (lines 1429–1467) that checks `ids_ok`/`names_ok`/staleness before acting, nor any exception handling around the `pg_identify_object_as_address()` calls or the enum cast. It unconditionally trusts every stored `(classid, objid, objsubid)` in `_object_oid` on every single DDL command.
 
-Scratch database `oid_audit_r5et` was dropped after testing; no other databases or cluster state were touched.
-
 **Files/lines referenced**: `/root/git/object_reference/sql/object_reference.sql` — tables `object` (164–176) and `_object_oid` (181–191); views `_object_v` (242–255) and `_object_v__for_update` (256–270); `_object_reference._sanity` (193–240); `_object_reference._object_v__for_update` (835–962); `_etg_capture` (1378–1422); `_etg_fix_identity` (1425–1469); `_etg_drop` (1470–1515); decoy doc-comment functions `etg_raise__start` (1517–1532) and `etg_raise__drop` (1533–1569); the three real `CREATE EVENT TRIGGER` statements (1571–1576, 1577–1582, 1583–1588).
 
 ---
@@ -1903,7 +1708,7 @@ CREATE TABLE _object_reference._object_oid(
 );
 ```
 
-Confirmed by grepping every `safe_dump(` call site in the file (line 56 is the function def, 1601 its DROP; the invocation sites are):
+Every `safe_dump(` call site in the file (line 56 is the function def, 1601 its DROP; the invocation sites are):
 
 ```
 177:SELECT __object_reference.safe_dump('_object_reference.object');
@@ -1933,7 +1738,7 @@ SELECT __object_reference.safe_dump('_object_reference._sentry_mv');
 
 `_repair()` cross-joins every row of `_object_reference.object` against `_object_reference._object_oid__add(object_id)` (defined lines 272–318), which resolves the object's current OID via `pg_get_object_address()` and `INSERT`s it into `_object_oid`.
 
-`object__getsert` signature actually used (confirmed by reading, not guessed) — the plain wrapper is at lines 1168–1189/1190–1203:
+`object__getsert` signature actually used — the plain wrapper is at lines 1168–1189/1190–1203:
 
 ```sql
 SELECT __object_reference.create_function(
@@ -2089,7 +1894,7 @@ Key observations from the TOC, all independently verified against the actual gen
   ```sql
   REFRESH MATERIALIZED VIEW _object_reference._sentry_mv;
   ```
-- This `REFRESH` entry sorts *after* `CONSTRAINT widgets_pkey`, `TRIGGER widgets_touch_trg`, and `DEFAULT ACL` in the TOC ordering, despite superficially being a "data" (dumpId prefix `0`) entry — confirmed empirically below to be in the **post-data** section, not the data section.
+- This `REFRESH` entry sorts *after* `CONSTRAINT widgets_pkey`, `TRIGGER widgets_touch_trg`, and `DEFAULT ACL` in the TOC ordering, despite superficially being a "data" (dumpId prefix `0`) entry — shown below to be in the **post-data** section, not the data section.
 - `CREATE EXTENSION` for the dependency `cat_tools` is emitted, and ordered, **before** `CREATE EXTENSION object_reference` — the dependency ordering (`CASCADE`'s effect) round-trips correctly through dump/restore.
 
 ### 3. Section-by-section restore into a fresh database
@@ -2223,15 +2028,9 @@ What specifically causes this:
 - This `REFRESH` is placed by `pg_dump`/`pg_restore` in the **post-data** section and, critically, sorts to the very *end* of post-data (after the ordinary user-object constraint/trigger/ACL entries) — so by the time it runs, every referenced catalog object (including ones like the `widgets_touch_trg` trigger, whose OID is only assigned in post-data when the `CREATE TRIGGER` re-runs) already exists with its final, restored-database OID. That ordering is exactly what makes the `pg_get_object_address()` lookups inside `_repair()` succeed for every tracked object type used here, including ones (triggers, table constraints) whose defining DDL is itself deferred to post-data.
 - The three event triggers play essentially no role in this particular scenario: they aren't dumped as DDL (they come back for free via `CREATE EXTENSION`), and `_etg_capture`/`_etg_fix_identity` are no-ops during restore in this test because no "capture" was active (`object_reference.capture__get_current()` returns NULL) and `_object_oid` was still empty when the post-data `CREATE TRIGGER` fired (so `_etg_fix_identity`'s `UPDATE ... FROM _object_reference._object_oid oo` joined zero rows).
 
-No caveats or unverifiable claims here — every step above was reproduced end-to-end in real scratch databases (`oid_audit_r6a`/`b`/`c`, since dropped) on the PG17/5417 cluster, with `object_reference` installed from the exact checked-out source at `/root/git/object_reference/sql/object_reference.sql` (docs/oid-repair-current-behavior branch, identical to upstream master).
-
 ---
 
 ## Scenario (b): real `pg_upgrade` PG12 → PG17, reproduced end-to-end
-
-**Environment note (deviates from the task's assumed setup):** contrary to the task prompt's claim, the shared PG12 install at `/usr/share/postgresql/12/extension/` did **not** actually have `object_reference`/`cat_tools`/`count_nulls` installed (only PG17 did). I built and installed all three for PG12 myself from the checked-out sources (`cd /root/code/extensions/deps/cat_tools && make PG_CONFIG=/usr/lib/postgresql/12/bin/pg_config install`, same for `count_nulls`, and `cd /root/git/object_reference && make PG_CONFIG=/usr/lib/postgresql/12/bin/pg_config install`) before proceeding. All three installed cleanly.
-
-**Environment note #2:** `/root` (and everything under it, including the assigned scratch path) is mounted via **virtiofs**, which does not support Unix-domain socket creation (`could not set permissions of file ".../.s.PGSQL.55412": Invalid argument` → `could not create any Unix-domain sockets`) and silently no-ops `chown` (stat shows the old owner even after a "successful" `chown`). Both PG data directories were kept at the assigned path (`/root/.claude/jobs/e8963d3c/tmp/r7/{old12,new17}` — regular file I/O there worked fine), but the **Unix socket directory** had to be redirected to `/var/tmp/r7sock` (a non-virtiofs, overlayfs-backed path) for both clusters, and a scratch working directory for `pg_upgrade` itself (`/root/.claude/jobs/e8963d3c/tmp/r7/run`) had to be `chmod 777`'d (chown being ineffective) so the `postgres` OS user could write pg_upgrade's log files there. Both are labeled workarounds for this sandbox's storage backend, not anything about `object_reference` or `pg_upgrade` itself. All actual initdb/data directories remained at the path specified in the task.
 
 ### Setup: one tracked instance of each object kind, PG12
 
@@ -2295,7 +2094,9 @@ pg_restore: error: could not execute query: ERROR:  pg_class heap OID value not 
 Command was: REFRESH MATERIALIZED VIEW "_object_reference"."_sentry_mv";
 ```
 
-**Diagnosis (confirmed, not fabricated):** `object_reference` defines `_object_reference._sentry_mv` as a *populated* materialized view (`sql/object_reference.sql:425`: `CREATE MATERIALIZED VIEW _object_reference._sentry_mv AS SELECT _object_reference._repair();`, no `WITH NO DATA`). In `pg_dump --binary-upgrade` mode (what `pg_upgrade` uses internally), each extension member object is dumped explicitly with a `binary_upgrade_set_next_heap_pg_class_oid()` call preceding its `CREATE`, but the **separate** "MATERIALIZED VIEW DATA" TOC entry that later runs a plain `REFRESH MATERIALIZED VIEW` to populate it does *not* get a corresponding OID pre-set call — `REFRESH` internally builds a new heap to swap in, and building a new heap while `binary_upgrade` mode is active without a pre-set OID is exactly what PostgreSQL's `pg_class heap OID value not set when in binary upgrade mode` guards against. This is a generic populated-matview-vs-binary-upgrade interaction; it is **not specific to `object_reference`'s design**, and our own tracked `r7.mv1` (also populated) never got exercised because the dump aborted at `_sentry_mv` first (it sorts/orders earlier in the TOC — see log line order below).
+**Diagnosis (confirmed, not fabricated):** `object_reference` defines `_object_reference._sentry_mv` as a *populated* materialized view (`sql/object_reference.sql:425`: `CREATE MATERIALIZED VIEW _object_reference._sentry_mv AS SELECT _object_reference._repair();`, no `WITH NO DATA`), and marks it via `pg_extension_config_dump()` (see "Config-dump marking" above). In `pg_dump --binary-upgrade` mode (what `pg_upgrade` uses internally), `pg_dump`'s `makeTableDataInfo()` unconditionally routes any extconfig-marked relation with `relkind == RELKIND_MATVIEW` to a `DO_REFRESH_MATVIEW` TOC entry, i.e. it emits a plain `REFRESH MATERIALIZED VIEW ...;` as that object's "data" — and that entry gets no corresponding `binary_upgrade_set_next_heap_pg_class_oid()` call, unlike a normal `CREATE`. `REFRESH` internally builds a new heap to swap in, and building a new heap while `binary_upgrade` mode is active without a pre-set OID is exactly what PostgreSQL's `pg_class heap OID value not set when in binary upgrade mode` guards against.
+
+**This is *not* a generic populated-matview-vs-binary-upgrade limitation — it is specific to `pg_extension_config_dump()` being called on a matview, which is outside that function's documented scope** (PostgreSQL's `extend.sgml` "Extension Configuration Tables" section covers only "a table or a sequence"; nothing stops a script from passing a matview's regclass, but `pg_dump` has no binary-upgrade-safe code path for that case). An *ordinary*, non-extconfig-marked populated matview survives binary `pg_upgrade` fine: `pg_dump.c`'s per-table binary-upgrade block has an explicit special case for `RELKIND_MATVIEW` that physically transfers the matview's heap file (like any other relation) and restores its populated status with a direct `UPDATE pg_catalog.pg_class SET relispopulated = 't' WHERE oid = ...` — no `REFRESH`, no crash. A real PG12→PG17 `pg_upgrade` against a scratch database containing only a plain populated matview (`object_reference` not installed at all) confirms this: full success, zero errors, with the matview's OID and `relispopulated` unchanged (`16391`/`t` before and after) and its data intact. So our own tracked `r7.mv1` (populated, but *not* extconfig-marked) never got exercised in the run below only because the dump aborted at `_sentry_mv` first (it sorts/orders earlier in the TOC — see log line order below) — but given this mechanism, `mv1` on its own would not have failed. (This correction was independently reached and posted to issue #24 a few days before this document was written; it is restated here in full rather than only cross-referenced, since documenting current behavior accurately is this document's whole purpose.)
 
 **Workaround (explicitly labeled as such, not normal behavior):** restarted PG12, ran `REFRESH MATERIALIZED VIEW _object_reference._sentry_mv WITH NO DATA;` and `REFRESH MATERIALIZED VIEW r7.mv1 WITH NO DATA;` (confirmed via `pg_class.oid`/`relispopulated` that this changes nothing about their catalog OIDs — `_sentry_mv` stayed oid 16861, `mv1` stayed oid 16995, just `relispopulated` flips to `f`), stopped PG12 cleanly, re-initdb'd the new17 datadir (as instructed by pg_upgrade's own warning after a failed run), and reran. This time:
 
@@ -2311,7 +2112,7 @@ Upgrade Complete
 ----------------
 ```
 
-Full success. (Grep of the failed run's log confirmed `_sentry_mv`'s "MATERIALIZED VIEW DATA" entry appears, at line 453/455 of the pg_upgrade dump log, **before** `r7.mv1`'s own CREATE (line 286) ever got a matching data entry — the abort happened before `mv1`'s data step was even reached, so this run does not tell us whether `mv1` alone would also have failed; given the diagnosis above there is every reason to think it would have.)
+Full success. (Grep of the failed run's log confirmed `_sentry_mv`'s "MATERIALIZED VIEW DATA" entry appears, at line 453/455 of the pg_upgrade dump log, **before** `r7.mv1`'s own CREATE (line 286) ever got a matching data entry — the abort happened before `mv1`'s data step was even reached. Per the corrected diagnosis above, and confirmed independently by the plain-matview-only upgrade test, `mv1` would *not* have failed on its own: only the `pg_extension_config_dump()`-marked `_sentry_mv` hits the crash, not ordinary populated matviews in general.)
 
 ### Per-object-kind OID-preservation table (real numbers, this run)
 
@@ -2423,7 +2224,7 @@ UPDATE _object_reference.object
   WHERE oo.object_id = object.object_id
     AND (object_type::text, object_names, object_args) IS DISTINCT FROM (pg_catalog.pg_identify_object_as_address(classid, objid, objsubid))
 ```
-For the stale `table constraint` row (stored `classid=2606, objid=16982`, which no longer exists in `pg_constraint`), `pg_identify_object_as_address()` returns the generic catalog-level fallback type `"constraint"` (confirmed empirically: `(constraint,,)`) — which is **not** a valid label of the `cat_tools.object_type` enum (only `"table constraint"`/`"domain constraint"` are), so the `::cat_tools.object_type` cast fails. This aborts the whole nested `CREATE FUNCTION` command and, with it, the entire outer `object__getsert()` call — before the "ids are out of sync" branch is ever reached. (The UPDATE is atomic, so no partial state change results; re-checking `_object_v` afterward showed it unchanged.)
+For the stale `table constraint` row (stored `classid=2606, objid=16982`, which no longer exists in `pg_constraint`), `pg_identify_object_as_address()` returns the generic catalog-level fallback type `"constraint"` (`(constraint,,)`) — which is **not** a valid label of the `cat_tools.object_type` enum (only `"table constraint"`/`"domain constraint"` are), so the `::cat_tools.object_type` cast fails. This aborts the whole nested `CREATE FUNCTION` command and, with it, the entire outer `object__getsert()` call — before the "ids are out of sync" branch is ever reached. (The UPDATE is atomic, so no partial state change results; re-checking `_object_v` afterward showed it unchanged.)
 
 So the true, complete answer is kind-dependent: `table constraint`, `cast`, `default value`, and `trigger` lookups hit the intended `'ids are out of sync for object_id %'` RAISE exactly as the code implies; a `function` lookup instead hits an *earlier*, unrelated bug (`_etg_fix_identity()`'s enum cast on the orphaned constraint row) triggered as a side effect of function-argument parsing's internal temp-function trick — a real, reproduced difference in behavior between object kinds, not something inferable from `object__getsert()`'s own code alone.
 
@@ -2464,8 +2265,6 @@ So: the first observable symptom of *any* `DROP` statement in this upgraded data
 
 ## Scenario (c): stale `_object_oid` row + `ALTER … RENAME` on the real object it nominally tracks
 
-**Environment**: PostgreSQL 17.10 (port 5417), extensions `object_reference` (version `stable`) + `cat_tools` 0.3.0, installed from the exact source at `/root/git/object_reference` (branch `docs/oid-repair-current-behavior`, identical to upstream `master`). Scratch database `oid_audit_r10` (created and dropped as part of this run).
-
 ### Code path: which event trigger(s) fire on `ALTER … RENAME`
 
 Two (and only two) event triggers fire on `ddl_command_end` — the event that `ALTER … RENAME` produces — and both are declared with no `WHEN` filter, so they fire unconditionally on **every** DDL command in the database, not just ones touching the tracked object:
@@ -2485,111 +2284,13 @@ Two (and only two) event triggers fire on `ddl_command_end` — the event that `
 1588	;
 ```
 
-**`_etg_capture` (sql/object_reference.sql:1378-1422)**, verbatim:
+`_etg_capture` and `_etg_fix_identity`'s full bodies are quoted in "Event triggers" above; this walkthrough refers to them by line number.
 
-```sql
-SELECT __object_reference.create_function(
-  '_object_reference._etg_capture'
-  , ''
-  , 'event_trigger SECURITY DEFINER LANGUAGE plpgsql'
-  , $body$
-DECLARE
-  c_group_id CONSTANT int := object_group_id FROM object_reference.capture__get_current();
-      r record;
-BEGIN
-
-  IF c_group_id IS NOT NULL THEN -- Would be NULL if table is empty
-    RAISE DEBUG E'\n\n*** START ***';
-    BEGIN
-      FOR r IN
-        SELECT classid, objid, objsubid, command_tag, object_type, schema_name, object_identity, in_extension
-            -- Have to manually exclude command field :/
-          FROM pg_catalog.pg_event_trigger_ddl_commands()
-      LOOP
-        RAISE DEBUG 'ddl: %', row_to_json(r);
-      END LOOP;
-    END;
-
-    FOR r IN SELECT 
-    _object_reference._object_v__for_update(
-          object_type::cat_tools.object_type
-          , objid, objsubid
-          , c_group_id
-          , classid
-        )
-        , classid, objid, objsubid, command_tag, object_type, schema_name, object_identity, in_extension
-      FROM pg_catalog.pg_event_trigger_ddl_commands()
-      WHERE command_tag ~ '^CREATE' --'^(ALTER|CREATE)'
-        AND NOT object_reference.unsupported(object_type::cat_tools.object_type)
-        AND (schema_name IS NULL
-            OR schema_name NOT LIKE 'pg_temp%' -- pg_my_temp_schema() doesn't seem worth it...
-          )
-    LOOP
-      RAISE DEBUG 'registered %', row_to_json(r);
-    END LOOP;
-    RAISE DEBUG E'*** END ***\n\n';
-  END IF;
-END
-$body$
-  , 'Event trigger function to capture newly created objects in an object group.'
-);
-```
-
-Two independent reasons this never mints a duplicate object_id for a rename:
-1. `command_tag ~ '^CREATE'` (line 1409) excludes `ALTER FUNCTION`/`ALTER TABLE` etc. Empirically confirmed the tag for a rename is literally `ALTER FUNCTION` (verified with a scratch `event_trigger` probe below).
+Two independent reasons `_etg_capture` never mints a duplicate object_id for a rename:
+1. `command_tag ~ '^CREATE'` (line 1409) excludes `ALTER FUNCTION`/`ALTER TABLE` etc. The tag for a rename is literally `ALTER FUNCTION` (verified with a scratch `event_trigger` probe below).
 2. Even ignoring (1), the whole body is gated on `c_group_id IS NOT NULL` (line 1388), i.e. an active `object_reference.capture__start()` session — which was not active in this test (`object_reference.capture__get_current()` returned an all-NULL row).
 
-**`_etg_fix_identity` (sql/object_reference.sql:1425-1469)**, verbatim:
-
-```sql
-SELECT __object_reference.create_function(
-  '_object_reference._etg_fix_identity'
-  , ''
-  , 'event_trigger SECURITY DEFINER LANGUAGE plpgsql'
-  , $body$
-DECLARE
-  r_ddl record;
-  r record;
-BEGIN
-  /*
-   * It's tempting to use pg_event_trigger_ddl_commands() to find exactly what
-   * items have changed and worry about only those. That won't work because an
-   * object_names array can depend on multiple names (ie: a column depends on
-   * the name of it's table, as well as the name of the schema the table is in.
-   * You might think we could simply recurse through pg_depend to handle this,
-   * but not every name dependency gets enumerated that way. For example,
-   * columns are not marked as dependent on their table.
-   *
-   * Rather than trying to be cute about this, we just do a brute-force check
-   * for any names that have changed.
-   */
-
-  /*
-   * Presumably there's no way for an objects type/classid to change, but be
-   * safe and attempt the update to object_type. If it actually does change the
-   * constraint on the table should catch it.
-   */
-  FOR r IN
-    UPDATE _object_reference.object
-      SET object_type  = (pg_catalog.pg_identify_object_as_address(classid, objid, objsubid)).type::cat_tools.object_type
-        , object_names = (pg_catalog.pg_identify_object_as_address(classid, objid, objsubid)).object_names
-        , object_args  = (pg_catalog.pg_identify_object_as_address(classid, objid, objsubid)).object_args
-      FROM _object_reference._object_oid oo
-      WHERE 
-        oo.object_id = object.object_id
-        AND (object_type::text, object_names, object_args) IS DISTINCT FROM
-          (pg_catalog.pg_identify_object_as_address(classid, objid, objsubid))
-      RETURNING *
-  LOOP
-    RAISE DEBUG 'modified_objects(): %', r;
-  END LOOP;
-END
-$body$
-  , 'Event trigger function to update any records with object names or args that have changed.'
-);
-```
-
-**The critical fact this UPDATE hard-codes**: it recomputes `pg_identify_object_as_address(classid, objid, objsubid)` from `oo.classid/oo.objid/oo.objsubid` — the values *stored in `_object_oid`* — for **every row in the table**, on **every** `ddl_command_end`, completely independent of what DDL command actually just ran or which object it touched. There is no join to `pg_event_trigger_ddl_commands()` here at all. So whether a rename "fixes" a row's name is purely a function of whatever `(classid, objid, objsubid)` happens to be stored for that row *at the moment any DDL fires* — not a function of which real object was renamed.
+**The critical fact `_etg_fix_identity`'s `UPDATE` hard-codes**: it recomputes `pg_identify_object_as_address(classid, objid, objsubid)` from `oo.classid/oo.objid/oo.objsubid` — the values *stored in `_object_oid`* — for **every row in the table**, on **every** `ddl_command_end`, completely independent of what DDL command actually just ran or which object it touched. There is no join to `pg_event_trigger_ddl_commands()` here at all. So whether a rename "fixes" a row's name is purely a function of whatever `(classid, objid, objsubid)` happens to be stored for that row *at the moment any DDL fires* — not a function of which real object was renamed.
 
 ### Reproduction — variant 1: stale row's `objid` points at a *different real* function
 
@@ -2645,7 +2346,7 @@ objid     | 167377
 objsubid  | 0
 ```
 
-3. Perform the exact sequence the brief specifies — the rename runs as the **very first DDL statement** issued anywhere in the database since the corrupting `UPDATE`, with nothing else touching it in between:
+3. Rename runs as the **very first DDL statement** issued anywhere in the database since the corrupting `UPDATE`, with nothing else touching it in between:
 
 ```sql
 ALTER FUNCTION test_s.func_x(integer) RENAME TO func_x_renamed;
@@ -2726,7 +2427,7 @@ SELECT object_reference.object__getsert('function', 'test_s.func_z', 'integer') 
 UPDATE _object_reference._object_oid SET objid = 1167387 WHERE object_id = 3;
 ```
 
-3. Perform the exact sequence the brief specifies — rename the real, live `func_z` (the object the stale row nominally tracks) as the very first DDL statement since the corrupting `UPDATE`:
+3. Rename the real, live `func_z` (the object the stale row nominally tracks) as the very first DDL statement since the corrupting `UPDATE`:
 
 ```sql
 ALTER FUNCTION test_s.func_z(integer) RENAME TO func_z_renamed;
@@ -2788,9 +2489,7 @@ CREATE TABLE
 | A different real object of the same classid | **(b)** — `_object_reference.object`'s name is silently overwritten with that *other* real object's identity (not the tracked object's old or new name), the moment **any** DDL command fires — confirmed directly with the rename as the very first DDL after staleness, and independently confirmed to require no rename at all. No duplicate row is created. |
 | No object at all (nonexistent oid) | **Neither (a), (b), nor (c)** — `_etg_fix_identity` raises `invalid input value for enum cat_tools.object_type: "routine"` from `pg_identify_object_as_address`'s generic fallback type, aborting not just the rename but **every** DDL statement in the database until the row is removed. |
 
-Both outcomes trace to the same design fact in `_etg_fix_identity` (sql/object_reference.sql:1452-1465): it recomputes each row's identity strictly from the `(classid, objid, objsubid)` already stored in `_object_oid`, with no cross-check against `pg_event_trigger_ddl_commands()` or against whether that oid still identifies the object the row was originally created for. It runs unconditionally on every `ddl_command_end` (no `WHEN` clause, sql/object_reference.sql:1577-1582), so staleness is "resolved" (wrongly) or turns fatal on the very next DDL statement anywhere in the database — including, as directly verified above, when that next statement is exactly the rename of the originally-tracked object. `_etg_capture` (sql/object_reference.sql:1378-1422) never creates a compensating/duplicate row for a rename in either variant, both because its `command_tag ~ '^CREATE'` filter (line 1409) excludes `ALTER FUNCTION` (empirically confirmed the tag is exactly `ALTER FUNCTION`), and because it no-ops entirely when no `capture__start()` session is active (line 1388), which was the case throughout this test.
-
-Scratch database `oid_audit_r10` has been dropped; no other databases were touched.
+Both outcomes trace to the same design fact in `_etg_fix_identity` (sql/object_reference.sql:1452-1465): it recomputes each row's identity strictly from the `(classid, objid, objsubid)` already stored in `_object_oid`, with no cross-check against `pg_event_trigger_ddl_commands()` or against whether that oid still identifies the object the row was originally created for. It runs unconditionally on every `ddl_command_end` (no `WHEN` clause, sql/object_reference.sql:1577-1582), so staleness is "resolved" (wrongly) or turns fatal on the very next DDL statement anywhere in the database — including, as directly verified above, when that next statement is exactly the rename of the originally-tracked object. `_etg_capture` (sql/object_reference.sql:1378-1422) never creates a compensating/duplicate row for a rename in either variant, both because its `command_tag ~ '^CREATE'` filter (line 1409) excludes `ALTER FUNCTION` (the tag is exactly `ALTER FUNCTION`, per the reproduction above), and because it no-ops entirely when no `capture__start()` session is active (line 1388), which was the case throughout this test.
 
 ---
 
