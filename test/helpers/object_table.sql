@@ -143,8 +143,10 @@ INSERT INTO test_prereq VALUES
 , ($$CREATE FUNCTION "test type out"("test type") RETURNS cstring LANGUAGE 'internal' IMMUTABLE AS 'int2in'$$)
 ;
 
--- \N is null character
--- sql-lint:disable-block prefer-short-type: COPY payload data, not real type references
+/*
+ * \N is null character
+ * sql-lint:disable-block prefer-short-type: COPY payload data, not real type references
+ */
 COPY test_object(object_type, object_name, secondary, create_command, drop_command) FROM STDIN (DELIMITER '|');
 table|test table||%("test column" int)|
 index|test table test index||%ON "test table"("test column")|

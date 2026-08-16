@@ -55,8 +55,10 @@ SELECT c.*
 ;
 
 
--- First verify that object group prevents drop
--- (see below too)
+/*
+ * First verify that object group prevents drop
+ * (see below too)
+ */
 SELECT c.*
   FROM test_capture_support.test_object o
     --, test_capture_support.test__drop(o) c
@@ -79,8 +81,10 @@ SELECT lives_ok(
 ) FROM object_group_ids
 ;
 
--- Drop objects for real this time
--- (see above too)
+/*
+ * Drop objects for real this time
+ * (see above too)
+ */
 SELECT c.*
   FROM test_capture_support.test_object o
     , test_capture_support.test__drop(o) c
