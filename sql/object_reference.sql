@@ -161,6 +161,27 @@ $body$
   , 'Execute arbitrary SQL with logging.'
 );
 
+SELECT __object_reference.create_function(
+  '_object_reference._is_own_object'
+  , $args$
+  classid oid
+  , objid oid
+$args$
+  , 'boolean LANGUAGE sql STABLE'
+  , $body$
+SELECT EXISTS(
+  SELECT 1
+    FROM pg_catalog.pg_depend d
+    WHERE d.classid = _is_own_object.classid
+      AND d.objid = _is_own_object.objid
+      AND d.deptype = 'e'
+      AND d.refclassid = 'pg_catalog.pg_extension'::regclass
+      AND d.refobjid = (SELECT oid FROM pg_catalog.pg_extension WHERE extname = 'object_reference')
+)
+$body$
+  , 'Is the object a member of the object_reference extension itself? (pg_depend deptype = e membership, not just co-installation.)'
+);
+
 CREATE TABLE _object_reference.object(
   object_id       serial                  PRIMARY KEY
   , object_type   cat_tools.object_type   NOT NULL
@@ -886,6 +907,14 @@ BEGIN
     ;
   END IF;
 
+  -- Refuse to track objects that are themselves members of this extension
+  IF _object_reference._is_own_object(c_classid, objid) THEN
+    RAISE 'cannot track an object that is a member of the object_reference extension itself'
+      USING DETAIL = format('object %s belongs to the object_reference extension', r_identity.identity)
+      , ERRCODE = 'feature_not_supported'
+    ;
+  END IF;
+
   -- Ensure the object record exists
   SELECT INTO r_object_v
       *
@@ -1397,7 +1426,7 @@ BEGIN
       END LOOP;
     END;
 
-    FOR r IN SELECT 
+    FOR r IN SELECT
     _object_reference._object_v__for_update(
           object_type::cat_tools.object_type
           , objid, objsubid
@@ -1411,6 +1440,12 @@ BEGIN
         AND (schema_name IS NULL
             OR schema_name NOT LIKE 'pg_temp%' -- pg_my_temp_schema() doesn't seem worth it...
           )
+        /*
+         * Self-recognition: skip DDL issued by any extension's own
+         * install/update script (ours included) rather than trying to
+         * capture it.
+         */
+        AND NOT in_extension
     LOOP
       RAISE DEBUG 'registered %', row_to_json(r);
     END LOOP;
@@ -1431,6 +1466,15 @@ DECLARE
   r_ddl record;
   r record;
 BEGIN
+  /*
+   * Self-recognition: skip DDL issued by any extension's own install/update
+   * script (ours included); pg_event_trigger_ddl_commands() marks this via
+   * in_extension, unlike pg_event_trigger_dropped_objects() (see _etg_drop).
+   */
+  IF EXISTS(SELECT 1 FROM pg_catalog.pg_event_trigger_ddl_commands() WHERE in_extension) THEN
+    RETURN;
+  END IF;
+
   /*
    * It's tempting to use pg_event_trigger_ddl_commands() to find exactly what
    * items have changed and worry about only those. That won't work because an
@@ -1514,6 +1558,87 @@ BEGIN
 END
 $body$
   , 'Event trigger function to drop object records when objects are removed.'
+);
+
+/*
+ * Internal update-time disable/enable mechanism, for use by this extension's
+ * OWN install/update scripts only (not part of the public API).
+ *
+ * zzz_object_reference__fix_identity and zzz_object_reference_capture can
+ * recognize (and skip) DDL issued by any extension's own script via
+ * pg_event_trigger_ddl_commands()'s in_extension column, so they never need
+ * to be disabled. zzz__object_reference_drop cannot: it fires from
+ * pg_event_trigger_dropped_objects(), which has no equivalent column, and it
+ * queries _object_reference._object_v -- a view an update script may itself
+ * be dropping and recreating -- so it must be truly disabled for the
+ * duration of such a script's structural section.
+ *
+ * ALTER EVENT TRIGGER is ordinary transactional DDL, so if the calling
+ * script's transaction rolls back, the DISABLE (and any ENABLE already run)
+ * rolls back with it -- no separate cleanup-on-error logic is needed here.
+ */
+SELECT __object_reference.create_function(
+  '_object_reference.internal_update__begin'
+  , $args$
+  event_trigger_names name[] DEFAULT '{zzz__object_reference_drop}'
+$args$
+  , 'void LANGUAGE plpgsql'
+  , $body$
+DECLARE
+  v_name name;
+BEGIN
+  BEGIN
+    CREATE TEMP TABLE __object_reference__internal_update(
+      evtname     name    PRIMARY KEY
+      , evtenabled  "char"  NOT NULL
+    );
+  EXCEPTION WHEN duplicate_table THEN
+    RAISE 'internal_update__begin() called while already in an internal update'
+      USING HINT = 'A previous internal_update__end() call may have been skipped.'
+    ;
+  END;
+
+  FOREACH v_name IN ARRAY event_trigger_names LOOP
+    INSERT INTO pg_temp.__object_reference__internal_update(evtname, evtenabled)
+      SELECT evtname, evtenabled FROM pg_catalog.pg_event_trigger WHERE evtname = v_name;
+
+    IF NOT FOUND THEN
+      RAISE 'event trigger "%" does not exist', v_name;
+    END IF;
+
+    PERFORM _object_reference.exec(format('ALTER EVENT TRIGGER %I DISABLE', v_name));
+  END LOOP;
+END
+$body$
+  , 'Disable the given (or default) event triggers for the duration of this extension''s own internal update; pair with internal_update__end().'
+);
+SELECT __object_reference.create_function(
+  '_object_reference.internal_update__end'
+  , ''
+  , 'void LANGUAGE plpgsql'
+  , $body$
+DECLARE
+  r record;
+BEGIN
+  FOR r IN SELECT evtname, evtenabled FROM pg_temp.__object_reference__internal_update LOOP
+    PERFORM _object_reference.exec(format(
+      'ALTER EVENT TRIGGER %I %s'
+      , r.evtname
+      , CASE r.evtenabled
+          WHEN 'O' THEN 'ENABLE'
+          WHEN 'R' THEN 'ENABLE REPLICA'
+          WHEN 'A' THEN 'ENABLE ALWAYS'
+          WHEN 'D' THEN 'DISABLE'
+        END
+    ));
+  END LOOP;
+
+  DROP TABLE pg_temp.__object_reference__internal_update;
+EXCEPTION WHEN undefined_table THEN
+  RAISE 'internal_update__end() called without a matching internal_update__begin()';
+END
+$body$
+  , 'Restore event triggers disabled by internal_update__begin() to their prior enabled state.'
 );
 
 SELECT __object_reference.create_function(

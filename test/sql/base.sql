@@ -9,7 +9,7 @@ SELECT plan(
   +1 -- schema
   +3 -- initial
   +2 -- new functions
-  +3 -- errors (includes temp object test)
+  +5 -- errors (includes temp object + self-tracking rejection tests)
   +1 -- create extensions
   +2 -- schema-qualification (search_path)
 );
@@ -72,6 +72,20 @@ SELECT throws_ok(
   , '0A000' -- feature_not_supported
   , 'cannot track temporary object'
   , 'temp objects are rejected'
+);
+
+-- Test rejection of object_reference's own extension-member objects
+SELECT throws_ok(
+  $$SELECT object_reference.object__getsert('table', '_object_reference.object')$$
+  , '0A000' -- feature_not_supported
+  , 'cannot track an object that is a member of the object_reference extension itself'
+  , 'own tracking table is rejected'
+);
+SELECT throws_ok(
+  $$SELECT object_reference.object__getsert('function', '_object_reference._etg_drop', '')$$
+  , '0A000' -- feature_not_supported
+  , 'cannot track an object that is a member of the object_reference extension itself'
+  , 'own event trigger function is rejected'
 );
 
 -- Create extensions
