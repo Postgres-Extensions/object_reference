@@ -105,32 +105,132 @@ END
 $body$;
 
 /*
- * 0.1.0 already installed this extension's own event triggers, and they
- * stay active for the rest of THIS session while the structural changes
- * below run. zzz__object_reference_drop in particular queries
- * _object_reference._object_v inside its own body, so it would fire -- and
- * error, since the view is momentarily gone -- the instant this script drops
- * that view a few statements down. All three are default-enabled (origin),
- * so setting session_replication_role = replica suppresses them for the
- * structural section below.
- *
- * This script is not necessarily the only thing running in its transaction
- * -- ALTER EXTENSION UPDATE can be issued as one statement among several in
- * a caller-managed transaction -- so session_replication_role cannot simply
- * be left disturbed for "the rest of the transaction" to sort out, and
- * whatever it's restored to afterward must be the caller's actual prior
- * value, not an assumed 'origin' default (the caller may already have it set
- * to something else for their own reasons). Stashed in a placeholder GUC
- * (there's no other way to carry a value between separate top-level
- * statements in a plain multi-statement SQL script -- this isn't a single
- * PL/pgSQL block) and restored explicitly right after the cleanup at the end
- * of this script, once every object the event triggers reference is back in
- * its final, current-source shape. A fresh install never hits this: it
- * creates these event triggers only at the very end, once nothing they
- * reference is still being modified.
+ * New: _object_reference.exec(), the permanent counterpart to
+ * __object_reference.exec() above, used by object__dependency__add() /
+ * object_group__dependency__add() (unchanged since 0.1.0, but 0.1.0 never
+ * created this permanent helper -- an existing gap this update closes) and
+ * by internal_update__begin()/__end() below.
  */
-SELECT set_config('object_reference.saved_session_replication_role', current_setting('session_replication_role'), true);
-SET LOCAL session_replication_role = replica;
+SELECT __object_reference.create_function(
+  '_object_reference.exec'
+  , 'sql text'
+  , 'void LANGUAGE plpgsql'
+  , $body$
+BEGIN
+  RAISE DEBUG 'sql = %', sql;
+  EXECUTE sql;
+END
+$body$
+  , 'Execute arbitrary SQL with logging.'
+);
+
+/*
+ * New: refuse to track objects that are themselves members of the
+ * object_reference extension (see the guard added to
+ * _object_v__for_update() below).
+ */
+SELECT __object_reference.create_function(
+  '_object_reference._is_own_object'
+  , $args$
+  classid oid
+  , objid oid
+$args$
+  , 'boolean LANGUAGE sql STABLE'
+  , $body$
+SELECT EXISTS(
+  SELECT 1
+    FROM pg_catalog.pg_depend d
+    WHERE d.classid = _is_own_object.classid
+      AND d.objid = _is_own_object.objid
+      AND d.deptype = 'e'
+      AND d.refclassid = 'pg_catalog.pg_extension'::regclass
+      AND d.refobjid = (SELECT oid FROM pg_catalog.pg_extension WHERE extname = 'object_reference')
+)
+$body$
+  , 'Is the object a member of the object_reference extension itself? (pg_depend deptype = e membership, not just co-installation.)'
+);
+
+/*
+ * New: internal update-time disable/enable mechanism, replacing the
+ * session_replication_role trick 0.1.0 had no equivalent of. 0.1.0 already
+ * installed this extension's own event triggers, and they stay active for
+ * the rest of THIS session while the structural changes below run.
+ * zzz__object_reference_drop in particular queries _object_reference._object_v
+ * inside its own body, so it would fire -- and error, since the view is
+ * momentarily gone -- the instant this script drops that view a few
+ * statements down. The other two event triggers self-recognize and skip our
+ * own script's DDL instead (see _etg_fix_identity/_etg_capture below), so
+ * only zzz__object_reference_drop needs to be disabled here.
+ *
+ * These are created now, ahead of the structural section, specifically so
+ * this script itself can call internal_update__begin() below -- a fresh
+ * install only ever needs these for FUTURE update scripts.
+ */
+SELECT __object_reference.create_function(
+  '_object_reference.internal_update__begin'
+  , $args$
+  event_trigger_names name[] DEFAULT '{zzz__object_reference_drop}'
+$args$
+  , 'void LANGUAGE plpgsql'
+  , $body$
+DECLARE
+  v_name name;
+BEGIN
+  BEGIN
+    CREATE TEMP TABLE __object_reference__internal_update(
+      evtname     name    PRIMARY KEY
+      , evtenabled  "char"  NOT NULL
+    );
+  EXCEPTION WHEN duplicate_table THEN
+    RAISE 'internal_update__begin() called while already in an internal update'
+      USING HINT = 'A previous internal_update__end() call may have been skipped.'
+    ;
+  END;
+
+  FOREACH v_name IN ARRAY event_trigger_names LOOP
+    INSERT INTO pg_temp.__object_reference__internal_update(evtname, evtenabled)
+      SELECT evtname, evtenabled FROM pg_catalog.pg_event_trigger WHERE evtname = v_name;
+
+    IF NOT FOUND THEN
+      RAISE 'event trigger "%" does not exist', v_name;
+    END IF;
+
+    PERFORM _object_reference.exec(format('ALTER EVENT TRIGGER %I DISABLE', v_name));
+  END LOOP;
+END
+$body$
+  , 'Disable the given (or default) event triggers for the duration of this extension''s own internal update; pair with internal_update__end().'
+);
+SELECT __object_reference.create_function(
+  '_object_reference.internal_update__end'
+  , ''
+  , 'void LANGUAGE plpgsql'
+  , $body$
+DECLARE
+  r record;
+BEGIN
+  FOR r IN SELECT evtname, evtenabled FROM pg_temp.__object_reference__internal_update LOOP
+    PERFORM _object_reference.exec(format(
+      'ALTER EVENT TRIGGER %I %s'
+      , r.evtname
+      , CASE r.evtenabled
+          WHEN 'O' THEN 'ENABLE'
+          WHEN 'R' THEN 'ENABLE REPLICA'
+          WHEN 'A' THEN 'ENABLE ALWAYS'
+          WHEN 'D' THEN 'DISABLE'
+        END
+    ));
+  END LOOP;
+
+  DROP TABLE pg_temp.__object_reference__internal_update;
+EXCEPTION WHEN undefined_table THEN
+  RAISE 'internal_update__end() called without a matching internal_update__begin()';
+END
+$body$
+  , 'Restore event triggers disabled by internal_update__begin() to their prior enabled state.'
+);
+
+SELECT _object_reference.internal_update__begin();
 
 /*
  * _object_reference.object: no column changes, just a missing
@@ -293,6 +393,14 @@ BEGIN
     ;
   END IF;
 
+  -- Refuse to track objects that are themselves members of this extension
+  IF _object_reference._is_own_object(c_classid, objid) THEN
+    RAISE 'cannot track an object that is a member of the object_reference extension itself'
+      USING DETAIL = format('object %s belongs to the object_reference extension', r_identity.identity)
+      , ERRCODE = 'feature_not_supported'
+    ;
+  END IF;
+
   -- Ensure the object record exists
   SELECT INTO r_object_v
       *
@@ -414,6 +522,120 @@ BEGIN
 END
 $body$
   , 'Check the sanity of object and _object_oid'
+);
+
+/*
+ * _etg_fix_identity/_etg_capture: gain a self-recognition guard so they skip
+ * DDL issued by any extension's own install/update script (ours included)
+ * instead of reacting to it -- see internal_update__begin()/__end() above
+ * for why zzz__object_reference_drop needs a different mechanism. Same
+ * signatures as 0.1.0, so a plain CREATE OR REPLACE (via create_function) is
+ * enough -- no DROP needed.
+ */
+SELECT __object_reference.create_function(
+  '_object_reference._etg_fix_identity'
+  , ''
+  , 'event_trigger SECURITY DEFINER LANGUAGE plpgsql'
+  , $body$
+DECLARE
+  r_ddl record;
+  r record;
+BEGIN
+  /*
+   * Self-recognition: skip DDL issued by any extension's own install/update
+   * script (ours included); pg_event_trigger_ddl_commands() marks this via
+   * in_extension, unlike pg_event_trigger_dropped_objects() (see _etg_drop).
+   */
+  IF EXISTS(SELECT 1 FROM pg_catalog.pg_event_trigger_ddl_commands() WHERE in_extension) THEN
+    RETURN;
+  END IF;
+
+  /*
+   * It's tempting to use pg_event_trigger_ddl_commands() to find exactly what
+   * items have changed and worry about only those. That won't work because an
+   * object_names array can depend on multiple names (ie: a column depends on
+   * the name of it's table, as well as the name of the schema the table is in.
+   * You might think we could simply recurse through pg_depend to handle this,
+   * but not every name dependency gets enumerated that way. For example,
+   * columns are not marked as dependent on their table.
+   *
+   * Rather than trying to be cute about this, we just do a brute-force check
+   * for any names that have changed.
+   */
+
+  /*
+   * Presumably there's no way for an objects type/classid to change, but be
+   * safe and attempt the update to object_type. If it actually does change the
+   * constraint on the table should catch it.
+   */
+  FOR r IN
+    UPDATE _object_reference.object
+      SET object_type  = (pg_catalog.pg_identify_object_as_address(classid, objid, objsubid)).type::cat_tools.object_type
+        , object_names = (pg_catalog.pg_identify_object_as_address(classid, objid, objsubid)).object_names
+        , object_args  = (pg_catalog.pg_identify_object_as_address(classid, objid, objsubid)).object_args
+      FROM _object_reference._object_oid oo
+      WHERE
+        oo.object_id = object.object_id
+        AND (object_type::text, object_names, object_args) IS DISTINCT FROM
+          (pg_catalog.pg_identify_object_as_address(classid, objid, objsubid))
+      RETURNING *
+  LOOP
+    RAISE DEBUG 'modified_objects(): %', r;
+  END LOOP;
+END
+$body$
+  , 'Event trigger function to update any records with object names or args that have changed.'
+);
+SELECT __object_reference.create_function(
+  '_object_reference._etg_capture'
+  , ''
+  , 'event_trigger SECURITY DEFINER LANGUAGE plpgsql'
+  , $body$
+DECLARE
+  c_group_id CONSTANT int := object_group_id FROM object_reference.capture__get_current();
+      r record;
+BEGIN
+
+  IF c_group_id IS NOT NULL THEN -- Would be NULL if table is empty
+    RAISE DEBUG E'\n\n*** START ***';
+    BEGIN
+      FOR r IN
+        SELECT classid, objid, objsubid, command_tag, object_type, schema_name, object_identity, in_extension
+            -- Have to manually exclude command field :/
+          FROM pg_catalog.pg_event_trigger_ddl_commands()
+      LOOP
+        RAISE DEBUG 'ddl: %', row_to_json(r);
+      END LOOP;
+    END;
+
+    FOR r IN SELECT
+    _object_reference._object_v__for_update(
+          object_type::cat_tools.object_type
+          , objid, objsubid
+          , c_group_id
+          , classid
+        )
+        , classid, objid, objsubid, command_tag, object_type, schema_name, object_identity, in_extension
+      FROM pg_catalog.pg_event_trigger_ddl_commands()
+      WHERE command_tag ~ '^CREATE' --'^(ALTER|CREATE)'
+        AND NOT object_reference.unsupported(object_type::cat_tools.object_type)
+        AND (schema_name IS NULL
+            OR schema_name NOT LIKE 'pg_temp%' -- pg_my_temp_schema() doesn't seem worth it...
+          )
+        /*
+         * Self-recognition: skip DDL issued by any extension's own
+         * install/update script (ours included) rather than trying to
+         * capture it.
+         */
+        AND NOT in_extension
+    LOOP
+      RAISE DEBUG 'registered %', row_to_json(r);
+    END LOOP;
+    RAISE DEBUG E'*** END ***\n\n';
+  END IF;
+END
+$body$
+  , 'Event trigger function to capture newly created objects in an object group.'
 );
 
 /*
@@ -679,10 +901,10 @@ DROP FUNCTION __object_reference.exec(
 DROP SCHEMA __object_reference;
 
 /*
- * Restore session_replication_role to the caller's actual prior value
- * (saved near the top of this script), now that the structural section and
- * its cleanup are both done.
+ * Re-enable zzz__object_reference_drop (to its actual prior state, saved by
+ * internal_update__begin() near the top of this script), now that the
+ * structural section and its cleanup are both done.
  */
-SELECT set_config('session_replication_role', current_setting('object_reference.saved_session_replication_role'), true);
+SELECT _object_reference.internal_update__end();
 
 -- vi: expandtab sw=2 ts=2

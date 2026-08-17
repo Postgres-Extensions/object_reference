@@ -1,0 +1,18 @@
+\set ECHO none
+1..15
+ok 1 - internal_update__begin() disables the default trigger
+ok 2 - zzz__object_reference_drop is disabled while an internal update is in progress
+ok 3 - internal_update__end() re-enables it
+ok 4 - zzz__object_reference_drop is back to its original (origin) state
+ok 5 - manually disable zzz_object_reference_capture ahead of time
+ok 6 - begin()/end() round-trip on an already-disabled trigger
+ok 7 - still disabled afterward -- its prior state was preserved, not assumed enabled
+ok 8 - restore zzz_object_reference_capture for later tests
+ok 9 - begin() the first time
+ok 10 - a second begin() without end() in between is rejected
+ok 11 - end() cleans up so later tests are unaffected
+ok 12 - end() without begin() is rejected
+ok 13 - begin() rejects an unknown event trigger name
+ok 14 - object_reference schema must not be part of the resolved search_path
+ok 15 - _object_reference schema must not be part of the resolved search_path
+# TRANSACTION INTENTIONALLY LEFT OPEN!
