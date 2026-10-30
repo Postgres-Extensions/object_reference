@@ -161,6 +161,43 @@ $body$
   , 'Execute arbitrary SQL with logging.'
 );
 
+SELECT __object_reference.create_function(
+  '_object_reference._is_own_object'
+  , $args$
+  classid oid
+  , objid oid
+$args$
+  , 'boolean LANGUAGE sql STABLE'
+  , $body$
+SELECT
+  EXISTS(
+    SELECT 1
+      FROM pg_catalog.pg_depend d
+      WHERE d.classid = _is_own_object.classid
+        AND d.objid = _is_own_object.objid
+        AND d.deptype = 'e'
+        AND d.refclassid = 'pg_catalog.pg_extension'::regclass
+        AND d.refobjid = e.oid
+  )
+  /*
+   * The extension's own declared schema (object_reference) is a special
+   * case: CREATE EXTENSION records the EXTENSION as depending on it (a
+   * plain DEPENDENCY_NORMAL row, extension -> schema), not the schema as
+   * an 'e' member of the extension the way every other object it creates
+   * is -- so it never matches the pg_depend check above.
+   */
+  OR (_is_own_object.classid = 'pg_catalog.pg_namespace'::regclass AND _is_own_object.objid = e.extnamespace)
+  /*
+   * The extension's own pg_extension row is also its own special case: it
+   * isn't a member of itself (no 'e' row with itself as both member and
+   * owner), so treat it as one explicitly.
+   */
+  OR (_is_own_object.classid = 'pg_catalog.pg_extension'::regclass AND _is_own_object.objid = e.oid)
+FROM (SELECT oid, extnamespace FROM pg_catalog.pg_extension WHERE extname = 'object_reference') e
+$body$
+  , 'Is the object a member of the object_reference extension itself? (pg_depend deptype = e membership, not just co-installation.)'
+);
+
 CREATE TABLE _object_reference.object(
   object_id       serial                  PRIMARY KEY
   , object_type   cat_tools.object_type   NOT NULL
@@ -886,6 +923,14 @@ BEGIN
     ;
   END IF;
 
+  -- Refuse to track objects that are themselves members of this extension
+  IF _object_reference._is_own_object(c_classid, objid) THEN
+    RAISE 'cannot track an object that is a member of the object_reference extension itself'
+      USING DETAIL = format('object %s belongs to the object_reference extension', r_identity.identity)
+      , ERRCODE = 'feature_not_supported'
+    ;
+  END IF;
+
   -- Ensure the object record exists
   SELECT INTO r_object_v
       *
@@ -958,7 +1003,7 @@ BEGIN
   RETURN r_object_v;
 END
 $body$
-  , 'Return details of a object record, creating a new record if one does not exist.'
+  , 'Return details of a object record, creating a new record if one does not exist. Heavy-weight compared to a plain read of _object_reference._object_v -- use that instead when an existing record is all that''s needed.'
 );
 
 SELECT __object_reference.create_function(
@@ -1397,7 +1442,7 @@ BEGIN
       END LOOP;
     END;
 
-    FOR r IN SELECT 
+    FOR r IN SELECT
     _object_reference._object_v__for_update(
           object_type::cat_tools.object_type
           , objid, objsubid
@@ -1411,6 +1456,33 @@ BEGIN
         AND (schema_name IS NULL
             OR schema_name NOT LIKE 'pg_temp%' -- pg_my_temp_schema() doesn't seem worth it...
           )
+        /*
+         * __object_reference is this extension's own scratch install/update
+         * schema (created and dropped within a single script, never an
+         * extension member), so _is_own_object() never recognizes it --
+         * exclude it here instead.
+         *
+         * object_reference/_object_reference are excluded outright rather
+         * than relying on _object_v__for_update()'s own _is_own_object()
+         * guard: a brand-new object created by this extension's own
+         * update/install script isn't yet recorded as an 'e' member in
+         * pg_depend at the point its CREATE fires ddl_command_end (that
+         * happens once the surrounding CREATE/ALTER EXTENSION completes),
+         * so _is_own_object() can't see it as self-owned yet either --
+         * confirmed by running into it: an active capture group during
+         * ALTER EXTENSION UPDATE otherwise ends up with this extension's
+         * own new functions as members.
+         *
+         * The schema-creation statement itself (CREATE SCHEMA
+         * __object_reference/etc.) has schema_name = NULL, with the name
+         * only available via object_identity -- checked separately, and
+         * restricted to object_type = 'schema', so an unrelated object of
+         * some other type whose identity happens to match one of these
+         * three exact strings (e.g. a same-named extension) isn't caught
+         * by this fallback.
+         */
+        AND coalesce(schema_name, '') NOT IN ('__object_reference', 'object_reference', '_object_reference')
+        AND NOT (object_type = 'schema' AND object_identity IN ('__object_reference', 'object_reference', '_object_reference'))
     LOOP
       RAISE DEBUG 'registered %', row_to_json(r);
     END LOOP;
