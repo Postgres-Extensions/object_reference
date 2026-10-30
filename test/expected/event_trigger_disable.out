@@ -1,5 +1,5 @@
 \set ECHO none
-1..20
+1..41
 ok 1 - manually disable test trigger b ahead of time
 ok 2 - disable() both test triggers
 ok 3 - test trigger a is disabled while a call is in effect
@@ -12,12 +12,33 @@ ok 9 - a second disable() without enable() in between is rejected
 ok 10 - enable() cleans up so later tests are unaffected
 ok 11 - enable() without disable() is rejected
 ok 12 - disable() rejects an unknown event trigger name
-ok 13 - disable() rejects a duplicate name in its own argument list
-ok 14 - start a capture group
-ok 15 - disable() (any trigger) also signals self-recognizing triggers to stand down
-ok 16 - enable() ends that window
-ok 17 - the table created while disable() was in effect was NOT captured
-ok 18 - stop the capture group
-ok 19 - object_reference schema must not be part of the resolved search_path
-ok 20 - _object_reference schema must not be part of the resolved search_path
+ok 13 - unknown name: nothing was changed
+ok 14 - disable() rejects a duplicate name in its own argument list
+ok 15 - duplicate name: nothing was changed
+ok 16 - disable() rejects a NULL array
+ok 17 - NULL array: nothing was changed
+ok 18 - disable() rejects an empty array
+ok 19 - empty array: nothing was changed
+ok 20 - disable() rejects a NULL element
+ok 21 - NULL element: nothing was changed
+ok 22 - disable() so a call is in effect
+ok 23 - duplicate name is reported before the in-effect error
+ok 24 - unknown name is reported before the in-effect error
+ok 25 - NULL array is reported before the in-effect error
+ok 26 - the call still in effect kept its own state
+ok 27 - enable() ends that call
+ok 28 - disable() with unsorted names
+ok 29 - names were processed in "C" collation order, not input order
+ok 30 - enable() after unsorted disable()
+ok 31 - all three restored
+ok 32 - helper does not fail for a role that cannot row-lock the catalog
+ok 33 - helper still returns the trigger's evtenabled
+ok 34 - helper took the advisory lock keyed on catalog and trigger oid
+ok 35 - start a capture group
+ok 36 - disable() (any trigger) also signals self-recognizing triggers to stand down
+ok 37 - enable() ends that window
+ok 38 - the table created while disable() was in effect was NOT captured
+ok 39 - stop the capture group
+ok 40 - object_reference schema must not be part of the resolved search_path
+ok 41 - _object_reference schema must not be part of the resolved search_path
 # TRANSACTION INTENTIONALLY LEFT OPEN!

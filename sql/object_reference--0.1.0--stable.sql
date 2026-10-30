@@ -365,9 +365,8 @@ DROP TABLE pg_temp.__object_reference__bootstrap_event_trigger_state;
  * first the way any two concurrent writes to the same catalog row would,
  * and without care, the one that unblocks second can record and later
  * restore a "prior state" that was never actually the trigger's state
- * immediately before it acted (see the FOR UPDATE lock in
- * event_trigger__disable()'s body below, which exists specifically to close
- * that gap). Prefer a self-recognition check (a session-local flag, checked
+ * immediately before it acted (see _event_trigger__lock()
+ * below, which exists specifically to close that gap). Prefer a self-recognition check (a session-local flag, checked
  * from inside the trigger's own body, as _etg_fix_identity/_etg_capture
  * above do) over calling this at all; reach for it only when nothing else
  * can make the trigger stay quiet, as is currently true for
@@ -392,6 +391,41 @@ DROP TABLE pg_temp.__object_reference__bootstrap_event_trigger_state;
  * mechanism-focused name, not one tied to "being mid-update").
  */
 SELECT __object_reference.create_function(
+  '_object_reference._event_trigger__lock'
+  , $args$
+  event_trigger_name name
+$args$
+  , '"char" LANGUAGE plpgsql'
+  , $body$
+DECLARE
+  v_oid oid;
+  v_enabled "char";
+BEGIN
+  BEGIN
+    SELECT evtenabled INTO v_enabled
+      FROM pg_catalog.pg_event_trigger
+      WHERE evtname = event_trigger_name
+      FOR UPDATE
+    ;
+  EXCEPTION WHEN insufficient_privilege THEN
+    -- No catalog UPDATE (e.g. managed services): an advisory lock only serializes other callers of this function.
+    SELECT oid INTO v_oid FROM pg_catalog.pg_event_trigger WHERE evtname = event_trigger_name;
+    IF FOUND THEN
+      PERFORM pg_catalog.pg_advisory_xact_lock(
+        'pg_catalog.pg_event_trigger'::pg_catalog.regclass::pg_catalog.oid::int
+        , v_oid::int
+      );
+      SELECT evtenabled INTO v_enabled FROM pg_catalog.pg_event_trigger WHERE evtname = event_trigger_name;
+    END IF;
+  END;
+
+  -- NULL if the trigger does not exist
+  RETURN v_enabled;
+END
+$body$
+  , 'Lock one event trigger against concurrent callers and return its current evtenabled (NULL if it does not exist).'
+);
+SELECT __object_reference.create_function(
   '_object_reference.event_trigger__disable'
   , $args$
   event_trigger_names name[]
@@ -407,37 +441,55 @@ BEGIN
    * exists -- this is a database-wide change with real race-condition risk
    * against concurrent sessions' DDL. See the warning above this function.
    */
-  BEGIN
-    -- Save old trigger state
-    CREATE TEMP TABLE __object_reference__event_trigger_state AS
-      SELECT evtname, evtenabled FROM pg_catalog.pg_event_trigger WHERE false
-    ;
-    ALTER TABLE pg_temp.__object_reference__event_trigger_state ADD PRIMARY KEY (evtname);
-  EXCEPTION WHEN duplicate_table THEN
-    RAISE 'event_trigger__disable() called while a previous call is still in effect'
-      USING HINT = 'A previous event_trigger__enable() call may have been skipped.'
-    ;
-  END;
+
+  -- Validate everything before any side effect.
+  IF event_trigger_names IS NULL OR coalesce(array_length(event_trigger_names, 1), 0) = 0 THEN
+    RAISE 'event_trigger_names must be a non-empty array';
+  END IF;
+
+  IF array_position(event_trigger_names, NULL) IS NOT NULL THEN
+    RAISE 'event_trigger_names contains a NULL name' USING DETAIL = event_trigger_names::text;
+  END IF;
 
   IF array_length(event_trigger_names, 1) <> (SELECT count(DISTINCT x) FROM unnest(event_trigger_names) x) THEN
     RAISE 'event_trigger_names contains a duplicate name' USING DETAIL = event_trigger_names::text;
   END IF;
 
-  FOREACH v_name IN ARRAY event_trigger_names LOOP
-    /*
-     * FOR UPDATE locks the row before we read it, so no other session's own
-     * ALTER EVENT TRIGGER on the same trigger can land between our read and
-     * our DISABLE below -- without it, a concurrent change there would
-     * leave us recording (and later restoring) a state that was never
-     * actually the trigger's state immediately before we disabled it.
-     */
-    SELECT evtenabled INTO v_enabled
-      FROM pg_catalog.pg_event_trigger
-      WHERE evtname = v_name
-      FOR UPDATE
-    ;
+  SELECT n INTO v_name
+    FROM unnest(event_trigger_names) n
+    WHERE NOT EXISTS (SELECT 1 FROM pg_catalog.pg_event_trigger WHERE evtname = n)
+    ORDER BY n COLLATE "C"
+    LIMIT 1
+  ;
+  IF FOUND THEN
+    RAISE 'event trigger "%" does not exist', v_name;
+  END IF;
 
-    IF NOT FOUND THEN
+  IF to_regclass('pg_temp.__object_reference__event_trigger_state') IS NOT NULL THEN
+    RAISE 'event_trigger__disable() called while a previous call is still in effect'
+      USING HINT = 'A previous event_trigger__enable() call may have been skipped.'
+    ;
+  END IF;
+
+  -- Save old trigger state
+  CREATE TEMP TABLE __object_reference__event_trigger_state AS
+    SELECT evtname, evtenabled FROM pg_catalog.pg_event_trigger WHERE false
+  ;
+  ALTER TABLE pg_temp.__object_reference__event_trigger_state ADD PRIMARY KEY (evtname);
+
+  -- Fixed lock order across all callers, to avoid deadlock.
+  FOR v_name IN SELECT n FROM unnest(event_trigger_names) n ORDER BY n COLLATE "C" LOOP
+    /*
+     * The lock must be held before we read evtenabled, so no other session's
+     * ALTER EVENT TRIGGER on the same trigger can land between our read and
+     * our DISABLE below -- otherwise we could record (and later restore) a
+     * state that was never the trigger's state immediately before we
+     * disabled it.
+     */
+    v_enabled := _object_reference._event_trigger__lock(v_name);
+
+    -- Dropped by another session since the check above
+    IF v_enabled IS NULL THEN
       RAISE 'event trigger "%" does not exist', v_name;
     END IF;
 
@@ -460,14 +512,15 @@ DECLARE
   v_states "char"[];
   i int;
 BEGIN
-  BEGIN
-    SELECT array_agg(evtname), array_agg(evtenabled)
-      INTO v_names, v_states
-      FROM pg_temp.__object_reference__event_trigger_state
-    ;
-  EXCEPTION WHEN undefined_table THEN
+  IF to_regclass('pg_temp.__object_reference__event_trigger_state') IS NULL THEN
     RAISE 'event_trigger__enable() called without a matching event_trigger__disable()';
-  END;
+  END IF;
+
+  -- Same order disable() locked in
+  SELECT array_agg(evtname ORDER BY evtname COLLATE "C"), array_agg(evtenabled ORDER BY evtname COLLATE "C")
+    INTO v_names, v_states
+    FROM pg_temp.__object_reference__event_trigger_state
+  ;
 
   /*
    * Drop our own bookkeeping table BEFORE re-enabling anything below:

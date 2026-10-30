@@ -19,14 +19,31 @@ END
 $$;
 CREATE EVENT TRIGGER event_trigger_disable_test__a ON ddl_command_start EXECUTE FUNCTION event_trigger_disable_test__noop();
 CREATE EVENT TRIGGER event_trigger_disable_test__b ON ddl_command_start EXECUTE FUNCTION event_trigger_disable_test__noop();
+-- Names whose "C" order (B, a, z) differs from a typical locale order (a, B, z)
+CREATE EVENT TRIGGER "event_trigger_disable_test__B" ON ddl_command_start EXECUTE FUNCTION event_trigger_disable_test__noop();
+CREATE EVENT TRIGGER event_trigger_disable_test__z ON ddl_command_start EXECUTE FUNCTION event_trigger_disable_test__noop();
+
+-- True iff no disable() call is in effect and test triggers a and b are in their initial states
+CREATE FUNCTION event_trigger_disable_test__pristine() RETURNS boolean LANGUAGE sql AS $$
+  SELECT to_regclass('pg_temp.__object_reference__event_trigger_state') IS NULL
+    AND (SELECT evtenabled FROM pg_catalog.pg_event_trigger WHERE evtname = 'event_trigger_disable_test__a') = 'O'
+    AND (SELECT evtenabled FROM pg_catalog.pg_event_trigger WHERE evtname = 'event_trigger_disable_test__b') = 'D'
+$$;
+CREATE ROLE event_trigger_disable_test__role;
+GRANT USAGE ON SCHEMA _object_reference TO event_trigger_disable_test__role;
+GRANT EXECUTE ON FUNCTION _object_reference._event_trigger__lock(name) TO event_trigger_disable_test__role;
 
 SELECT plan(
   0
   +7 -- multi-trigger disable/enable preserves each one's own prior state
   +3 -- nested disable() without an intervening enable() is rejected
   +1 -- enable() without a matching disable() is rejected
-  +1 -- disable() rejects an unknown event trigger name
-  +1 -- disable() rejects a duplicate name in its own argument list
+  +2 -- disable() rejects an unknown event trigger name, leaving state untouched
+  +2 -- disable() rejects a duplicate name in its own argument list, leaving state untouched
+  +6 -- disable() rejects NULL/empty/NULL-element arguments, leaving state untouched
+  +6 -- argument validation takes precedence over the "previous call in effect" check
+  +4 -- names passed unsorted are processed in "C" order
+  +3 -- _event_trigger__lock() falls back to an advisory lock for a role that cannot row-lock the catalog
   +5 -- zzz_object_reference_capture self-recognizes and stands down while a disable() is in effect
   +2 -- schema-qualification (search_path)
 );
@@ -91,11 +108,12 @@ SELECT throws_ok(
 
 -- Unknown event trigger name
 SELECT throws_ok(
-  $$SELECT _object_reference.event_trigger__disable('{no_such_event_trigger}')$$
+  $$SELECT _object_reference.event_trigger__disable('{event_trigger_disable_test__a,no_such_event_trigger}')$$
   , NULL
   , 'event trigger "no_such_event_trigger" does not exist'
   , 'disable() rejects an unknown event trigger name'
 );
+SELECT ok(event_trigger_disable_test__pristine(), 'unknown name: nothing was changed');
 
 -- Duplicate name in the same call
 SELECT throws_ok(
@@ -103,6 +121,126 @@ SELECT throws_ok(
   , NULL
   , 'event_trigger_names contains a duplicate name'
   , 'disable() rejects a duplicate name in its own argument list'
+);
+SELECT ok(event_trigger_disable_test__pristine(), 'duplicate name: nothing was changed');
+
+/*
+ * Argument validation runs before any side effect. (A raised error rolls
+ * the call back anyway, so "nothing was changed" can only be observed after
+ * the fact; the precedence checks below show the argument errors win over
+ * the "previous call in effect" error that was the first check to run once.)
+ */
+SELECT throws_ok(
+  $$SELECT _object_reference.event_trigger__disable(NULL)$$
+  , NULL
+  , 'event_trigger_names must be a non-empty array'
+  , 'disable() rejects a NULL array'
+);
+SELECT ok(event_trigger_disable_test__pristine(), 'NULL array: nothing was changed');
+SELECT throws_ok(
+  $$SELECT _object_reference.event_trigger__disable('{}')$$
+  , NULL
+  , 'event_trigger_names must be a non-empty array'
+  , 'disable() rejects an empty array'
+);
+SELECT ok(event_trigger_disable_test__pristine(), 'empty array: nothing was changed');
+SELECT throws_ok(
+  $$SELECT _object_reference.event_trigger__disable('{event_trigger_disable_test__a,NULL}')$$
+  , NULL
+  , 'event_trigger_names contains a NULL name'
+  , 'disable() rejects a NULL element'
+);
+SELECT ok(event_trigger_disable_test__pristine(), 'NULL element: nothing was changed');
+
+-- Argument errors are reported even while a previous call is in effect
+SELECT lives_ok(
+  $$SELECT _object_reference.event_trigger__disable('{event_trigger_disable_test__a}')$$
+  , 'disable() so a call is in effect'
+);
+SELECT throws_ok(
+  $$SELECT _object_reference.event_trigger__disable('{event_trigger_disable_test__b,event_trigger_disable_test__b}')$$
+  , NULL
+  , 'event_trigger_names contains a duplicate name'
+  , 'duplicate name is reported before the in-effect error'
+);
+SELECT throws_ok(
+  $$SELECT _object_reference.event_trigger__disable('{no_such_event_trigger}')$$
+  , NULL
+  , 'event trigger "no_such_event_trigger" does not exist'
+  , 'unknown name is reported before the in-effect error'
+);
+SELECT throws_ok(
+  $$SELECT _object_reference.event_trigger__disable(NULL)$$
+  , NULL
+  , 'event_trigger_names must be a non-empty array'
+  , 'NULL array is reported before the in-effect error'
+);
+SELECT is(
+  (SELECT array_agg(evtname) FROM pg_temp.__object_reference__event_trigger_state)
+  , '{event_trigger_disable_test__a}'::name[]
+  , 'the call still in effect kept its own state'
+);
+SELECT lives_ok(
+  $$SELECT _object_reference.event_trigger__enable()$$
+  , 'enable() ends that call'
+);
+
+-- Unsorted input is processed in "C" order
+SELECT lives_ok(
+  $$SELECT _object_reference.event_trigger__disable('{event_trigger_disable_test__z,event_trigger_disable_test__a,"event_trigger_disable_test__B"}')$$
+  , 'disable() with unsorted names'
+);
+SELECT is(
+  (SELECT array_agg(evtname ORDER BY ctid) FROM pg_temp.__object_reference__event_trigger_state)
+  , '{event_trigger_disable_test__B,event_trigger_disable_test__a,event_trigger_disable_test__z}'::name[]
+  , 'names were processed in "C" collation order, not input order'
+);
+SELECT lives_ok(
+  $$SELECT _object_reference.event_trigger__enable()$$
+  , 'enable() after unsorted disable()'
+);
+SELECT is(
+  (SELECT array_agg(evtenabled ORDER BY evtname COLLATE "C") FROM pg_catalog.pg_event_trigger WHERE evtname LIKE 'event\_trigger\_disable\_test\_\_%' AND evtname IN ('event_trigger_disable_test__B', 'event_trigger_disable_test__a', 'event_trigger_disable_test__z'))
+  , '{O,O,O}'::"char"[]
+  , 'all three restored'
+);
+
+/*
+ * A role that cannot row-lock pg_event_trigger (as on managed services
+ * without true superuser) gets an advisory lock instead of an error. The DO
+ * block runs as that role, and first proves the role really cannot FOR UPDATE
+ * the catalog.
+ */
+SELECT lives_ok(
+  $t$DO $do$
+    BEGIN
+      SET LOCAL ROLE event_trigger_disable_test__role;
+      BEGIN
+        PERFORM 1 FROM pg_catalog.pg_event_trigger WHERE evtname = 'event_trigger_disable_test__a' FOR UPDATE;
+        RAISE 'test role unexpectedly able to row-lock pg_event_trigger';
+      EXCEPTION WHEN insufficient_privilege THEN NULL;
+      END;
+      PERFORM set_config('event_trigger_disable_test.enabled'
+        , _object_reference._event_trigger__lock('event_trigger_disable_test__a')::text, true);
+      RESET ROLE;
+    END
+  $do$$t$
+  , 'helper does not fail for a role that cannot row-lock the catalog'
+);
+SELECT is(
+  current_setting('event_trigger_disable_test.enabled')
+  , 'O'
+  , 'helper still returns the trigger''s evtenabled'
+);
+SELECT is(
+  (SELECT count(*)::int FROM pg_locks
+    WHERE locktype = 'advisory'
+      AND pid = pg_backend_pid()
+      AND classid::int = 'pg_catalog.pg_event_trigger'::regclass::oid::int
+      AND objid::int = (SELECT oid::int FROM pg_catalog.pg_event_trigger WHERE evtname = 'event_trigger_disable_test__a')
+      AND objsubid = 2)
+  , 1
+  , 'helper took the advisory lock keyed on catalog and trigger oid'
 );
 
 /*
