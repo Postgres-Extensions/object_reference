@@ -188,9 +188,8 @@ SELECT
    */
   OR (_is_own_object.classid = 'pg_catalog.pg_namespace'::regclass AND _is_own_object.objid = e.extnamespace)
   /*
-   * The extension's own pg_extension row is also its own special case: it
-   * isn't a member of itself (no 'e' row with itself as both member and
-   * owner), so treat it as one explicitly.
+   * The extension's own pg_extension row has no 'e' row of its own, so match it
+   * by oid.
    */
   OR (_is_own_object.classid = 'pg_catalog.pg_extension'::regclass AND _is_own_object.objid = e.oid)
 FROM (SELECT oid, extnamespace FROM pg_catalog.pg_extension WHERE extname = 'object_reference') e

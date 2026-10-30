@@ -128,9 +128,8 @@ END
 $body$;
 
 /*
- * New: refuse to track objects that are themselves members of the
- * object_reference extension (see the guard added to
- * _object_v__for_update() below).
+ * _is_own_object(): true for members of the object_reference extension itself;
+ * _object_v__for_update() uses it to refuse tracking them.
  */
 SELECT __object_reference.create_function(
   '_object_reference._is_own_object'
@@ -159,9 +158,8 @@ SELECT
    */
   OR (_is_own_object.classid = 'pg_catalog.pg_namespace'::regclass AND _is_own_object.objid = e.extnamespace)
   /*
-   * The extension's own pg_extension row is also its own special case: it
-   * isn't a member of itself (no 'e' row with itself as both member and
-   * owner), so treat it as one explicitly.
+   * The extension's own pg_extension row has no 'e' row of its own, so match it
+   * by oid.
    */
   OR (_is_own_object.classid = 'pg_catalog.pg_extension'::regclass AND _is_own_object.objid = e.oid)
 FROM (SELECT oid, extnamespace FROM pg_catalog.pg_extension WHERE extname = 'object_reference') e
