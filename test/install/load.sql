@@ -177,6 +177,20 @@ SELECT CASE WHEN :'object_reference_test_update_to' = '' THEN ''
 CREATE EXTENSION IF NOT EXISTS count_nulls;
 
 CREATE EXTENSION object_reference VERSION :'object_reference_test_update_from' CASCADE;
+
+/*
+ * Fail unless the update restores each of the extension's event triggers to
+ * the exact state it had before, starting each from a distinct non-default
+ * state. The update and the check share a transaction, so a failed check
+ * also undoes the update and the suite then fails against the old version:
+ * this file's own output is never compared against anything. All three are
+ * reset to ENABLE afterwards, so the rest of the suite runs as usual.
+ */
+BEGIN;
+ALTER EVENT TRIGGER zzz_object_reference_capture DISABLE;
+ALTER EVENT TRIGGER zzz_object_reference__fix_identity ENABLE REPLICA;
+ALTER EVENT TRIGGER zzz__object_reference_drop ENABLE ALWAYS;
+
 /*
  * Suppress the deprecation NOTICEs the update script emits (e.g. the reg*
  * pseudotype removal), matching cat_tools' own install/load.sql.
@@ -184,6 +198,36 @@ CREATE EXTENSION object_reference VERSION :'object_reference_test_update_from' C
 SET client_min_messages = ERROR;
 ALTER EXTENSION object_reference UPDATE :object_reference_update_to_clause;
 SET client_min_messages = WARNING;
+
+DO $DO$
+DECLARE
+  v_mismatches text;
+BEGIN
+  SELECT string_agg(
+        format('%I is %L, expected %L.', e.evtname, t.evtenabled, e.evtenabled)
+        , ' ' ORDER BY e.evtname
+      )
+    INTO v_mismatches
+    FROM (VALUES
+        ('zzz_object_reference_capture'::name, 'D'::"char")
+      , ('zzz_object_reference__fix_identity', 'R')
+      , ('zzz__object_reference_drop', 'A')
+    ) e(evtname, evtenabled)
+    LEFT JOIN pg_catalog.pg_event_trigger t USING (evtname)
+    WHERE t.evtenabled IS DISTINCT FROM e.evtenabled
+  ;
+  IF v_mismatches IS NOT NULL THEN
+    RAISE EXCEPTION 'ALTER EXTENSION UPDATE did not restore event trigger state'
+      USING DETAIL = v_mismatches
+    ;
+  END IF;
+END
+$DO$;
+
+ALTER EVENT TRIGGER zzz_object_reference_capture ENABLE;
+ALTER EVENT TRIGGER zzz_object_reference__fix_identity ENABLE;
+ALTER EVENT TRIGGER zzz__object_reference_drop ENABLE;
+COMMIT;
 \else
 CREATE EXTENSION object_reference CASCADE;
 \endif
