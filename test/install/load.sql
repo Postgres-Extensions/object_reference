@@ -306,10 +306,10 @@ CREATE EXTENSION object_reference VERSION :'object_reference_test_update_from' C
 /*
  * Fail unless the update restores each of the extension's event triggers to
  * the exact state it had before, starting each from a distinct non-default
- * state. A failed check fails the run through psql's ON_ERROR_STOP exit
- * status; this file's own output is never compared against anything. All
- * three are reset to ENABLE afterwards, so the rest of the suite runs as
- * usual.
+ * state. A failed check exits psql nonzero (ON_ERROR_STOP), which fails the
+ * run only under pg_regress 16+; PG12's pg_regress reports it as ok. This
+ * file's own output is never compared against anything. All three are reset
+ * to ENABLE afterwards, so the rest of the suite runs as usual.
  */
 BEGIN;
 ALTER EVENT TRIGGER zzz_object_reference_capture DISABLE;
