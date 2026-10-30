@@ -353,53 +353,17 @@ END
 $$;
 DROP TABLE pg_temp.__object_reference__bootstrap_event_trigger_state;
 
-/*
- * WARNING: avoid disabling event triggers at all where any other option
- * exists. ALTER EVENT TRIGGER is ordinary transactional DDL -- like any
- * other catalog write, it's invisible to other sessions until commit (no
- * special database-wide/immediate effect: verified empirically that a
- * concurrent session's DDL neither blocks on, nor is otherwise affected by,
- * another session's still-uncommitted DISABLE) and it takes no lock at all
- * on the event trigger itself. The real risk is TWO SESSIONS both trying to
- * alter the SAME event trigger concurrently: a second writer blocks on the
- * first the way any two concurrent writes to the same catalog row would,
- * and without care, the one that unblocks second can record and later
- * restore a "prior state" that was never actually the trigger's state
- * immediately before it acted (see _event_trigger__lock()
- * below, which exists specifically to close that gap). Prefer a self-recognition check (a session-local flag, checked
- * from inside the trigger's own body, as _etg_fix_identity/_etg_capture
- * above do) over calling this at all; reach for it only when nothing else
- * can make the trigger stay quiet, as is currently true for
- * zzz__object_reference_drop.
- *
- * General-purpose event-trigger disable/enable mechanism, replacing the
- * session_replication_role trick 0.1.0 had no equivalent of. 0.1.0 already
- * installed this extension's own event triggers, and they stay active for
- * the rest of THIS session while the structural changes below run.
- * zzz__object_reference_drop in particular queries _object_reference._object_v
- * inside its own body, so it would fire -- and error, since the view is
- * momentarily gone -- the instant this script drops that view a few
- * statements down. It can't self-recognize the way _etg_fix_identity/
- * _etg_capture above do without also touching that same view from inside
- * its own body, so it must be truly disabled for the duration of this
- * script's structural section.
- *
- * These are created now, ahead of the structural section, specifically so
- * this script itself can call event_trigger__disable() below -- a fresh
- * install only ever needs these for FUTURE update scripts, or anywhere
- * else a future need to safely quiet an event trigger comes up (hence the
- * mechanism-focused name, not one tied to "being mid-update").
- */
+-- Helper for event_trigger__disable(); see the WARNING below.
 SELECT __object_reference.create_function(
   '_object_reference._event_trigger__lock'
   , $args$
-  event_trigger_name name
+  event_trigger_name pg_catalog.pg_event_trigger.evtname%TYPE
 $args$
-  , '"char" LANGUAGE plpgsql'
+  , 'pg_catalog.pg_event_trigger.evtenabled%TYPE LANGUAGE plpgsql'
   , $body$
 DECLARE
-  v_oid oid;
-  v_enabled "char";
+  v_oid pg_catalog.pg_event_trigger.oid%TYPE;
+  v_enabled pg_catalog.pg_event_trigger.evtenabled%TYPE;
 BEGIN
   BEGIN
     SELECT evtenabled INTO v_enabled
@@ -425,6 +389,49 @@ END
 $body$
   , 'Lock one event trigger against concurrent callers and return its current evtenabled (NULL if it does not exist).'
 );
+
+/*
+ * WARNING: avoid disabling event triggers at all where any other option
+ * exists. ALTER EVENT TRIGGER is ordinary transactional DDL -- like any
+ * other catalog write, it's invisible to other sessions until commit (no
+ * special database-wide/immediate effect: verified empirically that a
+ * concurrent session's DDL neither blocks on, nor is otherwise affected by,
+ * another session's still-uncommitted DISABLE) and it takes no lock at all
+ * on the event trigger itself. The real risk is TWO SESSIONS both trying to
+ * alter the SAME event trigger concurrently: a second writer blocks on the
+ * first the way any two concurrent writes to the same catalog row would,
+ * and without care, the one that unblocks second can record and later
+ * restore a "prior state" that was never actually the trigger's state
+ * immediately before it acted. disable() calls _event_trigger__lock() to
+ * close that gap: with catalog UPDATE privilege it locks the trigger's
+ * pg_event_trigger row FOR UPDATE, which also blocks a raw ALTER EVENT
+ * TRIGGER by another session. Without that privilege (e.g. managed
+ * services) it falls back to an advisory lock, which serializes only other
+ * callers of disable(), not a raw ALTER EVENT TRIGGER elsewhere. Prefer a
+ * self-recognition check (a session-local flag, checked from inside the
+ * trigger's own body, as _etg_fix_identity/_etg_capture above do) over
+ * calling this at all; reach for it only when nothing else can make the
+ * trigger stay quiet, as is currently true for
+ * zzz__object_reference_drop.
+ *
+ * General-purpose event-trigger disable/enable mechanism, replacing the
+ * session_replication_role trick 0.1.0 had no equivalent of. 0.1.0 already
+ * installed this extension's own event triggers, and they stay active for
+ * the rest of THIS session while the structural changes below run.
+ * zzz__object_reference_drop in particular queries _object_reference._object_v
+ * inside its own body, so it would fire -- and error, since the view is
+ * momentarily gone -- the instant this script drops that view a few
+ * statements down. It can't self-recognize the way _etg_fix_identity/
+ * _etg_capture above do without also touching that same view from inside
+ * its own body, so it must be truly disabled for the duration of this
+ * script's structural section.
+ *
+ * These are created now, ahead of the structural section, specifically so
+ * this script itself can call event_trigger__disable() below -- a fresh
+ * install only ever needs these for FUTURE update scripts, or anywhere
+ * else a future need to safely quiet an event trigger comes up (hence the
+ * mechanism-focused name, not one tied to "being mid-update").
+ */
 SELECT __object_reference.create_function(
   '_object_reference.event_trigger__disable'
   , $args$
@@ -433,8 +440,8 @@ $args$
   , 'void LANGUAGE plpgsql'
   , $body$
 DECLARE
-  v_name name;
-  v_enabled "char";
+  v_name pg_catalog.pg_event_trigger.evtname%TYPE;
+  v_enabled pg_catalog.pg_event_trigger.evtenabled%TYPE;
 BEGIN
   /*
    * WARNING: avoid disabling event triggers at all where any other option

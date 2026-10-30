@@ -306,8 +306,9 @@ CREATE EXTENSION object_reference VERSION :'object_reference_test_update_from' C
 /*
  * Fail unless the update restores each of the extension's event triggers to
  * the exact state it had before, starting each from a distinct non-default
- * state. A failed check exits psql nonzero (ON_ERROR_STOP), which fails the
- * run only under pg_regress 16+; PG12's pg_regress reports it as ok. This
+ * state. A failed check exits psql nonzero (ON_ERROR_STOP), but that does not
+ * fail the make run on any PostgreSQL version: pg_regress 16+ prints
+ * "not ok" and PG12's prints "ok", and make exits 0 either way. This
  * file's own output is never compared against anything. All three are reset
  * to ENABLE afterwards, so the rest of the suite runs as usual.
  */

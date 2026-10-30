@@ -1611,53 +1611,17 @@ $body$
   , 'Event trigger function to drop object records when objects are removed.'
 );
 
-/*
- * WARNING: avoid disabling event triggers at all where any other option
- * exists. ALTER EVENT TRIGGER is ordinary transactional DDL -- like any
- * other catalog write, it's invisible to other sessions until commit (no
- * special database-wide/immediate effect: verified empirically that a
- * concurrent session's DDL neither blocks on, nor is otherwise affected by,
- * another session's still-uncommitted DISABLE) and it takes no lock at all
- * on the event trigger itself. The real risk is TWO SESSIONS both trying to
- * alter the SAME event trigger concurrently: a second writer blocks on the
- * first the way any two concurrent writes to the same catalog row would,
- * and without care, the one that unblocks second can record and later
- * restore a "prior state" that was never actually the trigger's state
- * immediately before it acted (see _event_trigger__lock()
- * below, which exists specifically to close that gap). Prefer a self-recognition check (a session-local flag, checked
- * from inside the trigger's own body) over calling this at all; reach for
- * it only when nothing else can make the trigger stay quiet, as is
- * currently true for zzz__object_reference_drop.
- *
- * General-purpose event-trigger disable/enable mechanism, for use by this
- * extension's OWN install/update scripts only (not part of the public API).
- * Not tied to "being mid-update" specifically -- it's a plain disable-with-
- * restore primitive for any event trigger that can't self-recognize that it
- * should stay quiet.
- *
- * zzz_object_reference__fix_identity and zzz_object_reference_capture check
- * whether this call is currently in effect for their OWN session (via
- * to_regclass() on the temp table below) and skip if so, so they never need
- * to be disabled this way. zzz__object_reference_drop cannot self-recognize
- * the same way without also touching _object_reference._object_v -- a view
- * an update script may itself be dropping and recreating -- from inside its
- * own body, so it must be truly disabled for the duration of such a
- * script's structural section.
- *
- * ALTER EVENT TRIGGER is ordinary transactional DDL, so if the calling
- * script's transaction rolls back, the DISABLE (and any ENABLE already run)
- * rolls back with it -- no separate cleanup-on-error logic is needed here.
- */
+-- Helper for event_trigger__disable(); see the WARNING below.
 SELECT __object_reference.create_function(
   '_object_reference._event_trigger__lock'
   , $args$
-  event_trigger_name name
+  event_trigger_name pg_catalog.pg_event_trigger.evtname%TYPE
 $args$
-  , '"char" LANGUAGE plpgsql'
+  , 'pg_catalog.pg_event_trigger.evtenabled%TYPE LANGUAGE plpgsql'
   , $body$
 DECLARE
-  v_oid oid;
-  v_enabled "char";
+  v_oid pg_catalog.pg_event_trigger.oid%TYPE;
+  v_enabled pg_catalog.pg_event_trigger.evtenabled%TYPE;
 BEGIN
   BEGIN
     SELECT evtenabled INTO v_enabled
@@ -1683,6 +1647,49 @@ END
 $body$
   , 'Lock one event trigger against concurrent callers and return its current evtenabled (NULL if it does not exist).'
 );
+
+/*
+ * WARNING: avoid disabling event triggers at all where any other option
+ * exists. ALTER EVENT TRIGGER is ordinary transactional DDL -- like any
+ * other catalog write, it's invisible to other sessions until commit (no
+ * special database-wide/immediate effect: verified empirically that a
+ * concurrent session's DDL neither blocks on, nor is otherwise affected by,
+ * another session's still-uncommitted DISABLE) and it takes no lock at all
+ * on the event trigger itself. The real risk is TWO SESSIONS both trying to
+ * alter the SAME event trigger concurrently: a second writer blocks on the
+ * first the way any two concurrent writes to the same catalog row would,
+ * and without care, the one that unblocks second can record and later
+ * restore a "prior state" that was never actually the trigger's state
+ * immediately before it acted. disable() calls _event_trigger__lock() to
+ * close that gap: with catalog UPDATE privilege it locks the trigger's
+ * pg_event_trigger row FOR UPDATE, which also blocks a raw ALTER EVENT
+ * TRIGGER by another session. Without that privilege (e.g. managed
+ * services) it falls back to an advisory lock, which serializes only other
+ * callers of disable(), not a raw ALTER EVENT TRIGGER elsewhere. Prefer a
+ * self-recognition check (a session-local flag, checked from inside the
+ * trigger's own body) over calling this at all; reach for it only when
+ * nothing else can make the trigger stay quiet, as is currently true for
+ * zzz__object_reference_drop.
+ *
+ * General-purpose event-trigger disable/enable mechanism, for use by this
+ * extension's OWN install/update scripts only (not part of the public API).
+ * Not tied to "being mid-update" specifically -- it's a plain disable-with-
+ * restore primitive for any event trigger that can't self-recognize that it
+ * should stay quiet.
+ *
+ * zzz_object_reference__fix_identity and zzz_object_reference_capture check
+ * whether this call is currently in effect for their OWN session (via
+ * to_regclass() on the temp table below) and skip if so, so they never need
+ * to be disabled this way. zzz__object_reference_drop cannot self-recognize
+ * the same way without also touching _object_reference._object_v -- a view
+ * an update script may itself be dropping and recreating -- from inside its
+ * own body, so it must be truly disabled for the duration of such a
+ * script's structural section.
+ *
+ * ALTER EVENT TRIGGER is ordinary transactional DDL, so if the calling
+ * script's transaction rolls back, the DISABLE (and any ENABLE already run)
+ * rolls back with it -- no separate cleanup-on-error logic is needed here.
+ */
 SELECT __object_reference.create_function(
   '_object_reference.event_trigger__disable'
   , $args$
@@ -1691,8 +1698,8 @@ $args$
   , 'void LANGUAGE plpgsql'
   , $body$
 DECLARE
-  v_name name;
-  v_enabled "char";
+  v_name pg_catalog.pg_event_trigger.evtname%TYPE;
+  v_enabled pg_catalog.pg_event_trigger.evtenabled%TYPE;
 BEGIN
   /*
    * WARNING: avoid disabling event triggers at all where any other option

@@ -23,12 +23,6 @@ CREATE EVENT TRIGGER event_trigger_disable_test__b ON ddl_command_start EXECUTE 
 CREATE EVENT TRIGGER "event_trigger_disable_test__B" ON ddl_command_start EXECUTE FUNCTION event_trigger_disable_test__noop();
 CREATE EVENT TRIGGER event_trigger_disable_test__z ON ddl_command_start EXECUTE FUNCTION event_trigger_disable_test__noop();
 
--- True iff no disable() call is in effect and test triggers a and b are in their initial states
-CREATE FUNCTION event_trigger_disable_test__pristine() RETURNS boolean LANGUAGE sql AS $$
-  SELECT to_regclass('pg_temp.__object_reference__event_trigger_state') IS NULL
-    AND (SELECT evtenabled FROM pg_catalog.pg_event_trigger WHERE evtname = 'event_trigger_disable_test__a') = 'O'
-    AND (SELECT evtenabled FROM pg_catalog.pg_event_trigger WHERE evtname = 'event_trigger_disable_test__b') = 'D'
-$$;
 CREATE ROLE event_trigger_disable_test__role;
 GRANT USAGE ON SCHEMA _object_reference TO event_trigger_disable_test__role;
 GRANT EXECUTE ON FUNCTION _object_reference._event_trigger__lock(name) TO event_trigger_disable_test__role;
@@ -38,10 +32,10 @@ SELECT plan(
   +7 -- multi-trigger disable/enable preserves each one's own prior state
   +3 -- nested disable() without an intervening enable() is rejected
   +1 -- enable() without a matching disable() is rejected
-  +2 -- disable() rejects an unknown event trigger name, leaving state untouched
-  +2 -- disable() rejects a duplicate name in its own argument list, leaving state untouched
-  +6 -- disable() rejects NULL/empty/NULL-element arguments, leaving state untouched
-  +6 -- argument validation takes precedence over the "previous call in effect" check
+  +1 -- disable() rejects an unknown event trigger name
+  +1 -- disable() rejects a duplicate name in its own argument list
+  +3 -- disable() rejects a NULL array, an empty array and a NULL element
+  +8 -- argument errors are reported in preference to the "previous call in effect" error
   +4 -- names passed unsorted are processed in "C" order
   +3 -- _event_trigger__lock() falls back to an advisory lock for a role that cannot row-lock the catalog
   +5 -- zzz_object_reference_capture self-recognizes and stands down while a disable() is in effect
@@ -113,7 +107,6 @@ SELECT throws_ok(
   , 'event trigger "no_such_event_trigger" does not exist'
   , 'disable() rejects an unknown event trigger name'
 );
-SELECT ok(event_trigger_disable_test__pristine(), 'unknown name: nothing was changed');
 
 -- Duplicate name in the same call
 SELECT throws_ok(
@@ -122,13 +115,12 @@ SELECT throws_ok(
   , 'event_trigger_names contains a duplicate name'
   , 'disable() rejects a duplicate name in its own argument list'
 );
-SELECT ok(event_trigger_disable_test__pristine(), 'duplicate name: nothing was changed');
 
 /*
- * Argument validation runs before any side effect. (A raised error rolls
- * the call back anyway, so "nothing was changed" can only be observed after
- * the fact; the precedence checks below show the argument errors win over
- * the "previous call in effect" error that was the first check to run once.)
+ * Argument errors are reported by disable() itself; any state change made
+ * before the error would be rolled back with the call, so these tests cannot
+ * observe whether validation ran before a side effect. What they can observe
+ * is which error wins when several apply (see the precedence tests below).
  */
 SELECT throws_ok(
   $$SELECT _object_reference.event_trigger__disable(NULL)$$
@@ -136,21 +128,18 @@ SELECT throws_ok(
   , 'event_trigger_names must be a non-empty array'
   , 'disable() rejects a NULL array'
 );
-SELECT ok(event_trigger_disable_test__pristine(), 'NULL array: nothing was changed');
 SELECT throws_ok(
   $$SELECT _object_reference.event_trigger__disable('{}')$$
   , NULL
   , 'event_trigger_names must be a non-empty array'
   , 'disable() rejects an empty array'
 );
-SELECT ok(event_trigger_disable_test__pristine(), 'empty array: nothing was changed');
 SELECT throws_ok(
   $$SELECT _object_reference.event_trigger__disable('{event_trigger_disable_test__a,NULL}')$$
   , NULL
   , 'event_trigger_names contains a NULL name'
   , 'disable() rejects a NULL element'
 );
-SELECT ok(event_trigger_disable_test__pristine(), 'NULL element: nothing was changed');
 
 -- Argument errors are reported even while a previous call is in effect
 SELECT lives_ok(
@@ -174,6 +163,18 @@ SELECT throws_ok(
   , NULL
   , 'event_trigger_names must be a non-empty array'
   , 'NULL array is reported before the in-effect error'
+);
+SELECT throws_ok(
+  $$SELECT _object_reference.event_trigger__disable('{}')$$
+  , NULL
+  , 'event_trigger_names must be a non-empty array'
+  , 'empty array is reported before the in-effect error'
+);
+SELECT throws_ok(
+  $$SELECT _object_reference.event_trigger__disable('{event_trigger_disable_test__b,NULL}')$$
+  , NULL
+  , 'event_trigger_names contains a NULL name'
+  , 'NULL element is reported before the in-effect error'
 );
 SELECT is(
   (SELECT array_agg(evtname) FROM pg_temp.__object_reference__event_trigger_state)
