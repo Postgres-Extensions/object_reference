@@ -314,7 +314,7 @@ BEGIN
         , object_names = (pg_catalog.pg_identify_object_as_address(classid, objid, objsubid)).object_names
         , object_args  = (pg_catalog.pg_identify_object_as_address(classid, objid, objsubid)).object_args
       FROM _object_reference._object_oid oo
-      WHERE
+      WHERE 
         oo.object_id = object.object_id
         AND (object_type::text, object_names, object_args) IS DISTINCT FROM
           (pg_catalog.pg_identify_object_as_address(classid, objid, objsubid))
