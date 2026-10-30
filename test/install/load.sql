@@ -176,7 +176,147 @@ SELECT CASE WHEN :'object_reference_test_update_to' = '' THEN ''
  */
 CREATE EXTENSION IF NOT EXISTS count_nulls;
 
+/*
+ * Update scenarios. Each installs the old version inside its own
+ * transaction and rolls back, so nothing leaks into the committed install
+ * below; that includes sequence values, which a rollback alone would not
+ * reset on an install committed beforehand. Each one starts a capture group,
+ * asserts the event trigger state it starts the update from, updates, and
+ * checks the result:
+ *   1. All three triggers at their default ENABLE; a table created after the
+ *      update is captured.
+ *   2. zzz__object_reference_drop already disabled, and still disabled after.
+ *   3. A table captured before the update is renamed after it; the capture
+ *      group shows the new name.
+ */
+CREATE FUNCTION pg_temp.assert_event_trigger_state(
+  step text
+  , capture_state "char"
+  , fix_identity_state "char"
+  , drop_state "char"
+) RETURNS void LANGUAGE plpgsql AS $$
+DECLARE
+  v_mismatches text;
+BEGIN
+  SELECT string_agg(
+        format('%I is %L, expected %L.', e.evtname, t.evtenabled, e.evtenabled)
+        , ' ' ORDER BY e.evtname
+      )
+    INTO v_mismatches
+    FROM (VALUES
+        ('zzz_object_reference_capture'::name, capture_state)
+      , ('zzz_object_reference__fix_identity', fix_identity_state)
+      , ('zzz__object_reference_drop', drop_state)
+    ) e(evtname, evtenabled)
+    LEFT JOIN pg_catalog.pg_event_trigger t USING (evtname)
+    WHERE t.evtenabled IS DISTINCT FROM e.evtenabled
+  ;
+  IF v_mismatches IS NOT NULL THEN
+    RAISE EXCEPTION 'unexpected event trigger state %', step
+      USING DETAIL = v_mismatches
+    ;
+  END IF;
+END
+$$;
+
+CREATE FUNCTION pg_temp.assert_update_finished(
+  step text
+) RETURNS void LANGUAGE plpgsql AS $$
+DECLARE
+  v_installed text := (SELECT extversion FROM pg_catalog.pg_extension WHERE extname = 'object_reference');
+  v_target    text := coalesce(
+    nullif(current_setting('object_reference.test_update_to'), '')
+    , (SELECT default_version FROM pg_catalog.pg_available_extensions WHERE name = 'object_reference')
+  );
+BEGIN
+  IF v_installed IS DISTINCT FROM v_target THEN
+    RAISE EXCEPTION 'object_reference is at version % %, expected %', v_installed, step, v_target;
+  END IF;
+  IF to_regclass('pg_temp.__object_reference__event_trigger_state') IS NOT NULL
+    OR to_regclass('pg_temp.__object_reference__bootstrap_event_trigger_state') IS NOT NULL
+  THEN
+    RAISE EXCEPTION 'event trigger state table left behind %', step;
+  END IF;
+END
+$$;
+
+CREATE FUNCTION pg_temp.assert_capture_group(
+  step text
+  , expected text[]
+) RETURNS void LANGUAGE plpgsql AS $$
+DECLARE
+  v_members text[];
+BEGIN
+  SELECT coalesce(array_agg(array_to_string(o.object_names, '.') ORDER BY o.object_names), '{}')
+    INTO v_members
+    FROM _object_reference.object_group__object m
+      JOIN _object_reference.object o USING (object_id)
+    WHERE m.object_group_id = (object_reference.object_group__get('load_update_scenario')).object_group_id
+  ;
+  IF v_members IS DISTINCT FROM expected THEN
+    RAISE EXCEPTION 'unexpected capture group members %', step
+      USING DETAIL = format('Members are %L, expected %L.', v_members, expected)
+    ;
+  END IF;
+END
+$$;
+
+SET client_min_messages = ERROR;
+
+BEGIN;
 CREATE EXTENSION object_reference VERSION :'object_reference_test_update_from' CASCADE;
+SELECT object_reference.capture__start(object_reference.object_group__create('load_update_scenario'));
+SELECT pg_temp.assert_event_trigger_state('before the update in scenario 1', 'O', 'O', 'O');
+ALTER EXTENSION object_reference UPDATE :object_reference_update_to_clause;
+SELECT pg_temp.assert_update_finished('after the update in scenario 1');
+SELECT pg_temp.assert_event_trigger_state('after the update in scenario 1', 'O', 'O', 'O');
+SELECT pg_temp.assert_capture_group('after the update in scenario 1', '{}');
+CREATE TABLE load_update_scenario__after();
+SELECT pg_temp.assert_capture_group('after CREATE TABLE in scenario 1', '{public.load_update_scenario__after}');
+ROLLBACK;
+
+BEGIN;
+CREATE EXTENSION object_reference VERSION :'object_reference_test_update_from' CASCADE;
+ALTER EVENT TRIGGER zzz__object_reference_drop DISABLE;
+SELECT object_reference.capture__start(object_reference.object_group__create('load_update_scenario'));
+SELECT pg_temp.assert_event_trigger_state('before the update in scenario 2', 'O', 'O', 'D');
+ALTER EXTENSION object_reference UPDATE :object_reference_update_to_clause;
+SELECT pg_temp.assert_update_finished('after the update in scenario 2');
+SELECT pg_temp.assert_event_trigger_state('after the update in scenario 2', 'O', 'O', 'D');
+SELECT pg_temp.assert_capture_group('after the update in scenario 2', '{}');
+ROLLBACK;
+
+BEGIN;
+CREATE EXTENSION object_reference VERSION :'object_reference_test_update_from' CASCADE;
+SELECT object_reference.capture__start(object_reference.object_group__create('load_update_scenario'));
+CREATE TABLE load_update_scenario__before();
+SELECT pg_temp.assert_capture_group('before the update in scenario 3', '{public.load_update_scenario__before}');
+SELECT pg_temp.assert_event_trigger_state('before the update in scenario 3', 'O', 'O', 'O');
+ALTER EXTENSION object_reference UPDATE :object_reference_update_to_clause;
+SELECT pg_temp.assert_update_finished('after the update in scenario 3');
+SELECT pg_temp.assert_event_trigger_state('after the update in scenario 3', 'O', 'O', 'O');
+ALTER TABLE load_update_scenario__before RENAME TO load_update_scenario__renamed;
+SELECT pg_temp.assert_capture_group('after the rename in scenario 3', '{public.load_update_scenario__renamed}');
+ROLLBACK;
+
+SET client_min_messages = WARNING;
+
+CREATE EXTENSION object_reference VERSION :'object_reference_test_update_from' CASCADE;
+
+/*
+ * Fail unless the update restores each of the extension's event triggers to
+ * the exact state it had before, starting each from a distinct non-default
+ * state. A failed check exits psql nonzero (ON_ERROR_STOP), but that does not
+ * fail the make run on any PostgreSQL version: pg_regress 16+ prints
+ * "not ok" and PG12's prints "ok", and make exits 0 either way. This
+ * file's own output is never compared against anything. All three are reset
+ * to ENABLE afterwards, so the rest of the suite runs as usual.
+ */
+BEGIN;
+ALTER EVENT TRIGGER zzz_object_reference_capture DISABLE;
+ALTER EVENT TRIGGER zzz_object_reference__fix_identity ENABLE REPLICA;
+ALTER EVENT TRIGGER zzz__object_reference_drop ENABLE ALWAYS;
+
 /*
  * Suppress the deprecation NOTICEs the update script emits (e.g. the reg*
  * pseudotype removal), matching cat_tools' own install/load.sql.
@@ -184,6 +324,36 @@ CREATE EXTENSION object_reference VERSION :'object_reference_test_update_from' C
 SET client_min_messages = ERROR;
 ALTER EXTENSION object_reference UPDATE :object_reference_update_to_clause;
 SET client_min_messages = WARNING;
+
+DO $DO$
+DECLARE
+  v_mismatches text;
+BEGIN
+  SELECT string_agg(
+        format('%I is %L, expected %L.', e.evtname, t.evtenabled, e.evtenabled)
+        , ' ' ORDER BY e.evtname
+      )
+    INTO v_mismatches
+    FROM (VALUES
+        ('zzz_object_reference_capture'::name, 'D'::"char")
+      , ('zzz_object_reference__fix_identity', 'R')
+      , ('zzz__object_reference_drop', 'A')
+    ) e(evtname, evtenabled)
+    LEFT JOIN pg_catalog.pg_event_trigger t USING (evtname)
+    WHERE t.evtenabled IS DISTINCT FROM e.evtenabled
+  ;
+  IF v_mismatches IS NOT NULL THEN
+    RAISE EXCEPTION 'ALTER EXTENSION UPDATE did not restore event trigger state'
+      USING DETAIL = v_mismatches
+    ;
+  END IF;
+END
+$DO$;
+
+ALTER EVENT TRIGGER zzz_object_reference_capture ENABLE;
+ALTER EVENT TRIGGER zzz_object_reference__fix_identity ENABLE;
+ALTER EVENT TRIGGER zzz__object_reference_drop ENABLE;
+COMMIT;
 \else
 CREATE EXTENSION object_reference CASCADE;
 \endif
