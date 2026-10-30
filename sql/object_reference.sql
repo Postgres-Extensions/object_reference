@@ -1429,6 +1429,16 @@ DECLARE
   c_group_id CONSTANT int := object_group_id FROM object_reference.capture__get_current();
       r record;
 BEGIN
+  /*
+   * Self-recognition: skip while this extension's own event_trigger__disable()
+   * is in effect (see below) -- i.e. this extension's own install/update
+   * script is doing delicate internal restructuring right now. Checked via
+   * to_regclass() rather than a catalog lookup that would error if the temp
+   * table doesn't exist, which is the common case.
+   */
+  IF to_regclass('pg_temp.__object_reference__event_trigger_state') IS NOT NULL THEN
+    RETURN;
+  END IF;
 
   IF c_group_id IS NOT NULL THEN -- Would be NULL if table is empty
     RAISE DEBUG E'\n\n*** START ***';
@@ -1459,8 +1469,11 @@ BEGIN
         /*
          * __object_reference is this extension's own scratch install/update
          * schema (created and dropped within a single script, never an
-         * extension member), so _is_own_object() never recognizes it --
-         * exclude it here instead.
+         * extension member) -- self-recognition via the temp table above
+         * can't cover the handful of bootstrap statements that run before
+         * that table exists, so exclude it here too (object_identity
+         * carries the name for the CREATE SCHEMA statement itself, where
+         * schema_name is null).
          *
          * object_reference/_object_reference are excluded outright rather
          * than relying on _object_v__for_update()'s own _is_own_object()
@@ -1503,6 +1516,17 @@ DECLARE
   r_ddl record;
   r record;
 BEGIN
+  /*
+   * Self-recognition: skip while this extension's own event_trigger__disable()
+   * is in effect (see below) -- i.e. this extension's own install/update
+   * script is doing delicate internal restructuring right now. Checked via
+   * to_regclass() rather than a catalog lookup that would error if the temp
+   * table doesn't exist, which is the common case.
+   */
+  IF to_regclass('pg_temp.__object_reference__event_trigger_state') IS NOT NULL THEN
+    RETURN;
+  END IF;
+
   /*
    * It's tempting to use pg_event_trigger_ddl_commands() to find exactly what
    * items have changed and worry about only those. That won't work because an
@@ -1586,6 +1610,151 @@ BEGIN
 END
 $body$
   , 'Event trigger function to drop object records when objects are removed.'
+);
+
+/*
+ * WARNING: avoid disabling event triggers at all where any other option
+ * exists. ALTER EVENT TRIGGER is ordinary transactional DDL -- like any
+ * other catalog write, it's invisible to other sessions until commit (no
+ * special database-wide/immediate effect: verified empirically that a
+ * concurrent session's DDL neither blocks on, nor is otherwise affected by,
+ * another session's still-uncommitted DISABLE) and it takes no lock at all
+ * on the event trigger itself. The real risk is TWO SESSIONS both trying to
+ * alter the SAME event trigger concurrently: a second writer blocks on the
+ * first the way any two concurrent writes to the same catalog row would,
+ * and without care, the one that unblocks second can record and later
+ * restore a "prior state" that was never actually the trigger's state
+ * immediately before it acted (see the FOR UPDATE lock in
+ * event_trigger__disable()'s body below, which exists specifically to close
+ * that gap). Prefer a self-recognition check (a session-local flag, checked
+ * from inside the trigger's own body) over calling this at all; reach for
+ * it only when nothing else can make the trigger stay quiet, as is
+ * currently true for zzz__object_reference_drop.
+ *
+ * General-purpose event-trigger disable/enable mechanism, for use by this
+ * extension's OWN install/update scripts only (not part of the public API).
+ * Not tied to "being mid-update" specifically -- it's a plain disable-with-
+ * restore primitive for any event trigger that can't self-recognize that it
+ * should stay quiet.
+ *
+ * zzz_object_reference__fix_identity and zzz_object_reference_capture check
+ * whether this call is currently in effect for their OWN session (via
+ * to_regclass() on the temp table below) and skip if so, so they never need
+ * to be disabled this way. zzz__object_reference_drop cannot self-recognize
+ * the same way without also touching _object_reference._object_v -- a view
+ * an update script may itself be dropping and recreating -- from inside its
+ * own body, so it must be truly disabled for the duration of such a
+ * script's structural section.
+ *
+ * ALTER EVENT TRIGGER is ordinary transactional DDL, so if the calling
+ * script's transaction rolls back, the DISABLE (and any ENABLE already run)
+ * rolls back with it -- no separate cleanup-on-error logic is needed here.
+ */
+SELECT __object_reference.create_function(
+  '_object_reference.event_trigger__disable'
+  , $args$
+  event_trigger_names name[]
+$args$
+  , 'void LANGUAGE plpgsql'
+  , $body$
+DECLARE
+  v_name name;
+  v_enabled "char";
+BEGIN
+  /*
+   * WARNING: avoid disabling event triggers at all where any other option
+   * exists -- this is a database-wide change with real race-condition risk
+   * against concurrent sessions' DDL. See the warning above this function.
+   */
+  BEGIN
+    -- Save old trigger state
+    CREATE TEMP TABLE __object_reference__event_trigger_state AS
+      SELECT evtname, evtenabled FROM pg_catalog.pg_event_trigger WHERE false
+    ;
+    ALTER TABLE pg_temp.__object_reference__event_trigger_state ADD PRIMARY KEY (evtname);
+  EXCEPTION WHEN duplicate_table THEN
+    RAISE 'event_trigger__disable() called while a previous call is still in effect'
+      USING HINT = 'A previous event_trigger__enable() call may have been skipped.'
+    ;
+  END;
+
+  IF array_length(event_trigger_names, 1) <> (SELECT count(DISTINCT x) FROM unnest(event_trigger_names) x) THEN
+    RAISE 'event_trigger_names contains a duplicate name' USING DETAIL = event_trigger_names::text;
+  END IF;
+
+  FOREACH v_name IN ARRAY event_trigger_names LOOP
+    /*
+     * FOR UPDATE locks the row before we read it, so no other session's own
+     * ALTER EVENT TRIGGER on the same trigger can land between our read and
+     * our DISABLE below -- without it, a concurrent change there would
+     * leave us recording (and later restoring) a state that was never
+     * actually the trigger's state immediately before we disabled it.
+     */
+    SELECT evtenabled INTO v_enabled
+      FROM pg_catalog.pg_event_trigger
+      WHERE evtname = v_name
+      FOR UPDATE
+    ;
+
+    IF NOT FOUND THEN
+      RAISE 'event trigger "%" does not exist', v_name;
+    END IF;
+
+    INSERT INTO pg_temp.__object_reference__event_trigger_state(evtname, evtenabled)
+      VALUES (v_name, v_enabled);
+
+    PERFORM _object_reference.exec(format('ALTER EVENT TRIGGER %I DISABLE', v_name));
+  END LOOP;
+END
+$body$
+  , 'Disable the given event triggers, remembering their exact prior state; pair with event_trigger__enable().'
+);
+SELECT __object_reference.create_function(
+  '_object_reference.event_trigger__enable'
+  , ''
+  , 'void LANGUAGE plpgsql'
+  , $body$
+DECLARE
+  v_names name[];
+  v_states "char"[];
+  i int;
+BEGIN
+  BEGIN
+    SELECT array_agg(evtname), array_agg(evtenabled)
+      INTO v_names, v_states
+      FROM pg_temp.__object_reference__event_trigger_state
+    ;
+  EXCEPTION WHEN undefined_table THEN
+    RAISE 'event_trigger__enable() called without a matching event_trigger__disable()';
+  END;
+
+  /*
+   * Drop our own bookkeeping table BEFORE re-enabling anything below:
+   * dropping it is itself DDL, and if zzz__object_reference_drop is one of
+   * the triggers being restored here, re-enabling it first would make this
+   * DROP immediately fire it -- reacting to our own internal cleanup,
+   * exactly the hazard this whole mechanism exists to avoid. (Confirmed by
+   * running into it: with the table dropped after, an active capture group
+   * elsewhere left a stale tracked row that this DROP's cascade into
+   * post_restore() then found and errored on.)
+   */
+  DROP TABLE pg_temp.__object_reference__event_trigger_state;
+
+  FOR i IN 1..coalesce(array_length(v_names, 1), 0) LOOP
+    PERFORM _object_reference.exec(format(
+      'ALTER EVENT TRIGGER %I %s'
+      , v_names[i]
+      , CASE v_states[i]
+          WHEN 'O' THEN 'ENABLE'
+          WHEN 'R' THEN 'ENABLE REPLICA'
+          WHEN 'A' THEN 'ENABLE ALWAYS'
+          WHEN 'D' THEN 'DISABLE'
+        END
+    ));
+  END LOOP;
+END
+$body$
+  , 'Restore event triggers disabled by event_trigger__disable() to their exact prior state.'
 );
 
 SELECT __object_reference.create_function(

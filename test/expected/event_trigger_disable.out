@@ -1,0 +1,23 @@
+\set ECHO none
+1..20
+ok 1 - manually disable test trigger b ahead of time
+ok 2 - disable() both test triggers
+ok 3 - test trigger a is disabled while a call is in effect
+ok 4 - test trigger b is (still) disabled while a call is in effect
+ok 5 - enable() restores both
+ok 6 - test trigger a is back to its original (origin) state
+ok 7 - test trigger b is still disabled -- its prior state was preserved, not assumed enabled
+ok 8 - disable() the first time
+ok 9 - a second disable() without enable() in between is rejected
+ok 10 - enable() cleans up so later tests are unaffected
+ok 11 - enable() without disable() is rejected
+ok 12 - disable() rejects an unknown event trigger name
+ok 13 - disable() rejects a duplicate name in its own argument list
+ok 14 - start a capture group
+ok 15 - disable() (any trigger) also signals self-recognizing triggers to stand down
+ok 16 - enable() ends that window
+ok 17 - the table created while disable() was in effect was NOT captured
+ok 18 - stop the capture group
+ok 19 - object_reference schema must not be part of the resolved search_path
+ok 20 - _object_reference schema must not be part of the resolved search_path
+# TRANSACTION INTENTIONALLY LEFT OPEN!
