@@ -133,6 +133,46 @@ SELECT set_config('object_reference.saved_session_replication_role', current_set
 SET LOCAL session_replication_role = replica;
 
 /*
+ * _is_own_object(): true for members of the object_reference extension itself;
+ * _object_v__for_update() uses it to refuse tracking them.
+ */
+SELECT __object_reference.create_function(
+  '_object_reference._is_own_object'
+  , $args$
+  classid oid
+  , objid oid
+$args$
+  , 'boolean LANGUAGE sql STABLE'
+  , $body$
+SELECT
+  EXISTS(
+    SELECT 1
+      FROM pg_catalog.pg_depend d
+      WHERE d.classid = _is_own_object.classid
+        AND d.objid = _is_own_object.objid
+        AND d.deptype = 'e'
+        AND d.refclassid = 'pg_catalog.pg_extension'::regclass
+        AND d.refobjid = e.oid
+  )
+  /*
+   * The extension's own declared schema (object_reference) is a special
+   * case: CREATE EXTENSION records the EXTENSION as depending on it (a
+   * plain DEPENDENCY_NORMAL row, extension -> schema), not the schema as
+   * an 'e' member of the extension the way every other object it creates
+   * is -- so it never matches the pg_depend check above.
+   */
+  OR (_is_own_object.classid = 'pg_catalog.pg_namespace'::regclass AND _is_own_object.objid = e.extnamespace)
+  /*
+   * The extension's own pg_extension row has no 'e' row of its own, so match it
+   * by oid.
+   */
+  OR (_is_own_object.classid = 'pg_catalog.pg_extension'::regclass AND _is_own_object.objid = e.oid)
+FROM (SELECT oid, extnamespace FROM pg_catalog.pg_extension WHERE extname = 'object_reference') e
+$body$
+  , 'Is the object a member of the object_reference extension itself? (pg_depend deptype = e membership, not just co-installation.)'
+);
+
+/*
  * _object_reference.object: no column changes, just a missing
  * extension_config_dump marking on its sequence (added alongside the table
  * itself in the current source; 0.1.0 only marked the table).
@@ -293,6 +333,14 @@ BEGIN
     ;
   END IF;
 
+  -- Refuse to track objects that are themselves members of this extension
+  IF _object_reference._is_own_object(c_classid, objid) THEN
+    RAISE 'cannot track an object that is a member of the object_reference extension itself'
+      USING DETAIL = format('object %s belongs to the object_reference extension', r_identity.identity)
+      , ERRCODE = 'feature_not_supported'
+    ;
+  END IF;
+
   -- Ensure the object record exists
   SELECT INTO r_object_v
       *
@@ -365,7 +413,7 @@ BEGIN
   RETURN r_object_v;
 END
 $body$
-  , 'Return details of a object record, creating a new record if one does not exist.'
+  , 'Return details of a object record, creating a new record if one does not exist. Heavy-weight compared to a plain read of _object_reference._object_v -- use that instead when an existing record is all that''s needed.'
 );
 
 SELECT __object_reference.create_function(
