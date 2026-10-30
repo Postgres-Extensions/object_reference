@@ -188,9 +188,8 @@ SELECT
    */
   OR (_is_own_object.classid = 'pg_catalog.pg_namespace'::regclass AND _is_own_object.objid = e.extnamespace)
   /*
-   * The extension's own pg_extension row is also its own special case: it
-   * isn't a member of itself (no 'e' row with itself as both member and
-   * owner), so treat it as one explicitly.
+   * The extension's own pg_extension row has no 'e' row of its own, so match it
+   * by oid.
    */
   OR (_is_own_object.classid = 'pg_catalog.pg_extension'::regclass AND _is_own_object.objid = e.oid)
 FROM (SELECT oid, extnamespace FROM pg_catalog.pg_extension WHERE extname = 'object_reference') e
@@ -1442,7 +1441,7 @@ BEGIN
       END LOOP;
     END;
 
-    FOR r IN SELECT
+    FOR r IN SELECT 
     _object_reference._object_v__for_update(
           object_type::cat_tools.object_type
           , objid, objsubid
@@ -1456,33 +1455,6 @@ BEGIN
         AND (schema_name IS NULL
             OR schema_name NOT LIKE 'pg_temp%' -- pg_my_temp_schema() doesn't seem worth it...
           )
-        /*
-         * __object_reference is this extension's own scratch install/update
-         * schema (created and dropped within a single script, never an
-         * extension member), so _is_own_object() never recognizes it --
-         * exclude it here instead.
-         *
-         * object_reference/_object_reference are excluded outright rather
-         * than relying on _object_v__for_update()'s own _is_own_object()
-         * guard: a brand-new object created by this extension's own
-         * update/install script isn't yet recorded as an 'e' member in
-         * pg_depend at the point its CREATE fires ddl_command_end (that
-         * happens once the surrounding CREATE/ALTER EXTENSION completes),
-         * so _is_own_object() can't see it as self-owned yet either --
-         * confirmed by running into it: an active capture group during
-         * ALTER EXTENSION UPDATE otherwise ends up with this extension's
-         * own new functions as members.
-         *
-         * The schema-creation statement itself (CREATE SCHEMA
-         * __object_reference/etc.) has schema_name = NULL, with the name
-         * only available via object_identity -- checked separately, and
-         * restricted to object_type = 'schema', so an unrelated object of
-         * some other type whose identity happens to match one of these
-         * three exact strings (e.g. a same-named extension) isn't caught
-         * by this fallback.
-         */
-        AND coalesce(schema_name, '') NOT IN ('__object_reference', 'object_reference', '_object_reference')
-        AND NOT (object_type = 'schema' AND object_identity IN ('__object_reference', 'object_reference', '_object_reference'))
     LOOP
       RAISE DEBUG 'registered %', row_to_json(r);
     END LOOP;

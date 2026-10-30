@@ -104,8 +104,7 @@ SELECT throws_ok(
  * object__getsert('extension', ...): the latter's generic by-name OID
  * lookup for object types with no reg-type cast (extension included)
  * derives the wrong catalog column name and fails before ever reaching
- * this check -- a pre-existing, unrelated bug (see
- * object__getsert_w_group_id's v_name_field derivation, predating this PR).
+ * this check (see object__getsert_w_group_id's v_name_field derivation).
  */
 SELECT ok(
   _object_reference._is_own_object(
