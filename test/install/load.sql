@@ -232,10 +232,13 @@ BEGIN
   IF v_installed IS DISTINCT FROM v_target THEN
     RAISE EXCEPTION 'object_reference is at version % %, expected %', v_installed, step, v_target;
   END IF;
-  IF to_regclass('pg_temp.__object_reference__event_trigger_state') IS NOT NULL
-    OR to_regclass('pg_temp.__object_reference__bootstrap_event_trigger_state') IS NOT NULL
-  THEN
+  IF to_regclass('pg_temp.__object_reference__event_trigger_state') IS NOT NULL THEN
     RAISE EXCEPTION 'event trigger state table left behind %', step;
+  END IF;
+  IF EXISTS (SELECT 1 FROM pg_catalog.pg_event_trigger WHERE evtname = '__object_reference__event_trigger_sentinel')
+    OR to_regprocedure('pg_temp.__object_reference__event_trigger_sentinel()') IS NOT NULL
+  THEN
+    RAISE EXCEPTION 'sentinel event trigger or its function left behind %', step;
   END IF;
 END
 $$;
@@ -306,11 +309,14 @@ CREATE EXTENSION object_reference VERSION :'object_reference_test_update_from' C
 /*
  * Fail unless the update restores each of the extension's event triggers to
  * the exact state it had before, starting each from a distinct non-default
- * state. A failed check exits psql nonzero (ON_ERROR_STOP), but that does not
- * fail the make run on any PostgreSQL version: pg_regress 16+ prints
- * "not ok" and PG12's prints "ok", and make exits 0 either way. This
- * file's own output is never compared against anything. All three are reset
- * to ENABLE afterwards, so the rest of the suite runs as usual.
+ * state. All three are reset to ENABLE afterwards, so the rest of the suite
+ * runs as usual.
+ *
+ * A failed check in this file never fails make by itself: pgxntool ignores
+ * installcheck's exit status and fails `make test` only when regression.diffs
+ * exists, and this file's output is never compared. pg_regress 16+ prints
+ * "not ok" for it and PG12's prints "ok"; make fails only if later tests also
+ * fail.
  */
 BEGIN;
 ALTER EVENT TRIGGER zzz_object_reference_capture DISABLE;
