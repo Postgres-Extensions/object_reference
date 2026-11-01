@@ -296,7 +296,7 @@ BEGIN
 
     -- Dropped by another session since the check above
     IF v_enabled IS NULL THEN
-      RAISE 'event trigger "%" does not exist', v_name
+      RAISE 'event trigger "%" was dropped concurrently', v_name
         USING ERRCODE = 'undefined_object'
       ;
     END IF;
