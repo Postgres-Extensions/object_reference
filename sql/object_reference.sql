@@ -1709,6 +1709,7 @@ SELECT __object_reference.create_function(
   , 'void LANGUAGE plpgsql'
   , $body$
 DECLARE
+  -- name[] and "char"[] stand in for %TYPE[], as in disable() above.
   v_names name[];
   v_states "char"[];
   i int;

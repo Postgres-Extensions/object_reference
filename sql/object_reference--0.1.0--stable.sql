@@ -1,4 +1,8 @@
--- event_trigger__disable() of all three event triggers, by hand only because 0.1.0 has no disable(); the event_trigger__enable() at the end undoes it.
+/*
+ * Disables all three event triggers for this script (a hand-written copy of
+ * event_trigger__disable(), which 0.1.0 lacks); event_trigger__enable() at the
+ * end restores them. See the sentinel note on event_trigger__disable() below.
+ */
 CREATE FUNCTION pg_temp.__object_reference__event_trigger_sentinel() RETURNS event_trigger LANGUAGE plpgsql AS 'BEGIN END';
 CREATE EVENT TRIGGER __object_reference__event_trigger_sentinel
   ON ddl_command_end
@@ -324,6 +328,7 @@ SELECT __object_reference.create_function(
   , 'void LANGUAGE plpgsql'
   , $body$
 DECLARE
+  -- name[] and "char"[] stand in for %TYPE[], as in disable() above.
   v_names name[];
   v_states "char"[];
   i int;

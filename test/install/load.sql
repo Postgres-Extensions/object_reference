@@ -307,16 +307,15 @@ SET client_min_messages = WARNING;
 CREATE EXTENSION object_reference VERSION :'object_reference_test_update_from' CASCADE;
 
 /*
- * Fail unless the update restores each of the extension's event triggers to
- * the exact state it had before, starting each from a distinct non-default
- * state. All three are reset to ENABLE afterwards, so the rest of the suite
- * runs as usual.
+ * This check never fails `make test` by itself: pgxntool ignores installcheck's
+ * exit status and fails only when regression.diffs exists, and this file's
+ * output is never compared (pg_regress 16+ prints "not ok" for it, PG12's
+ * prints "ok"); make fails only if later tests also fail.
  *
- * A failed check in this file never fails make by itself: pgxntool ignores
- * installcheck's exit status and fails `make test` only when regression.diffs
- * exists, and this file's output is never compared. pg_regress 16+ prints
- * "not ok" for it and PG12's prints "ok"; make fails only if later tests also
- * fail.
+ * It fails the file unless the update restores each of the extension's event
+ * triggers to the exact state it had before, starting each from a distinct
+ * non-default state. All three are reset to ENABLE afterwards, so the rest of
+ * the suite runs as usual.
  */
 BEGIN;
 ALTER EVENT TRIGGER zzz_object_reference_capture DISABLE;
@@ -331,30 +330,7 @@ SET client_min_messages = ERROR;
 ALTER EXTENSION object_reference UPDATE :object_reference_update_to_clause;
 SET client_min_messages = WARNING;
 
-DO $DO$
-DECLARE
-  v_mismatches text;
-BEGIN
-  SELECT string_agg(
-        format('%I is %L, expected %L.', e.evtname, t.evtenabled, e.evtenabled)
-        , ' ' ORDER BY e.evtname
-      )
-    INTO v_mismatches
-    FROM (VALUES
-        ('zzz_object_reference_capture'::name, 'D'::"char")
-      , ('zzz_object_reference__fix_identity', 'R')
-      , ('zzz__object_reference_drop', 'A')
-    ) e(evtname, evtenabled)
-    LEFT JOIN pg_catalog.pg_event_trigger t USING (evtname)
-    WHERE t.evtenabled IS DISTINCT FROM e.evtenabled
-  ;
-  IF v_mismatches IS NOT NULL THEN
-    RAISE EXCEPTION 'ALTER EXTENSION UPDATE did not restore event trigger state'
-      USING DETAIL = v_mismatches
-    ;
-  END IF;
-END
-$DO$;
+SELECT pg_temp.assert_event_trigger_state('after the committed update', 'D', 'R', 'A');
 
 ALTER EVENT TRIGGER zzz_object_reference_capture ENABLE;
 ALTER EVENT TRIGGER zzz_object_reference__fix_identity ENABLE;
