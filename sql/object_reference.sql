@@ -1663,7 +1663,7 @@ BEGIN
     ;
   END IF;
 
-  -- Another session's sentinel (or one committed without enable()) would make CREATE EVENT TRIGGER below fail with a plain "already exists".
+  -- A committed sentinel (another session's, or one committed without enable()) would make CREATE EVENT TRIGGER below fail with a plain "already exists".
   IF EXISTS (SELECT 1 FROM pg_catalog.pg_event_trigger WHERE evtname = '__object_reference__event_trigger_sentinel') THEN
     RAISE 'event_trigger__disable() from another session is still in effect'
       USING ERRCODE = 'object_not_in_prerequisite_state'

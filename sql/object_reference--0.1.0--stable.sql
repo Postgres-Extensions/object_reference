@@ -3,6 +3,7 @@
  * event_trigger__disable(), which 0.1.0 lacks); event_trigger__enable() at the
  * end restores them. See the sentinel note on event_trigger__disable() below.
  */
+-- Unlike disable(), this does not check for an existing sentinel: a committed one fails with the plain "already exists" error.
 CREATE FUNCTION pg_temp.__object_reference__event_trigger_sentinel() RETURNS event_trigger LANGUAGE plpgsql AS 'BEGIN END';
 CREATE EVENT TRIGGER __object_reference__event_trigger_sentinel
   ON ddl_command_end
@@ -282,7 +283,7 @@ BEGIN
     ;
   END IF;
 
-  -- Another session's sentinel (or one committed without enable()) would make CREATE EVENT TRIGGER below fail with a plain "already exists".
+  -- A committed sentinel (another session's, or one committed without enable()) would make CREATE EVENT TRIGGER below fail with a plain "already exists".
   IF EXISTS (SELECT 1 FROM pg_catalog.pg_event_trigger WHERE evtname = '__object_reference__event_trigger_sentinel') THEN
     RAISE 'event_trigger__disable() from another session is still in effect'
       USING ERRCODE = 'object_not_in_prerequisite_state'

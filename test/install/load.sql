@@ -179,10 +179,9 @@ CREATE EXTENSION IF NOT EXISTS count_nulls;
 /*
  * Update scenarios. Each installs the old version inside its own
  * transaction and rolls back, so nothing leaks into the committed install
- * below; that includes sequence values, which a rollback alone would not
- * reset on an install committed beforehand. Each one starts a capture group,
- * asserts the event trigger state it starts the update from, updates, and
- * checks the result:
+ * below (the install is inside the rolled-back transaction, so its sequences
+ * roll back too). Each one starts a capture group, asserts the event
+ * trigger state it starts the update from, updates, and checks the result:
  *   1. All three triggers at their default ENABLE; a table created after the
  *      update is captured.
  *   2. zzz__object_reference_drop already disabled, and still disabled after.
@@ -307,15 +306,16 @@ SET client_min_messages = WARNING;
 CREATE EXTENSION object_reference VERSION :'object_reference_test_update_from' CASCADE;
 
 /*
- * This check never fails `make test` by itself: pgxntool ignores installcheck's
- * exit status and fails only when regression.diffs exists, and this file's
- * output is never compared (pg_regress 16+ prints "not ok" for it, PG12's
- * prints "ok"); make fails only if later tests also fail.
+ * This check fails only this load.sql run: pgxntool ignores installcheck's exit
+ * status and fails `make test` only when regression.diffs exists, and this
+ * file's output is never compared (pg_regress 16+ prints "not ok" for it,
+ * PG12's prints "ok"). make fails because test/load.sql then raises in every
+ * later test file, as the extension was not installed.
  *
- * It fails the file unless the update restores each of the extension's event
- * triggers to the exact state it had before, starting each from a distinct
- * non-default state. All three are reset to ENABLE afterwards, so the rest of
- * the suite runs as usual.
+ * It fails this load.sql run unless the update restores each of the
+ * extension's event triggers to the exact state it had before, starting each
+ * from a distinct non-default state. All three are reset to ENABLE afterwards,
+ * so the rest of the suite runs as usual.
  */
 BEGIN;
 ALTER EVENT TRIGGER zzz_object_reference_capture DISABLE;
