@@ -26,6 +26,7 @@ BEGIN
     BEGIN
       SELECT evtenabled INTO v_enabled FROM pg_catalog.pg_event_trigger WHERE evtname = v_name FOR UPDATE;
     EXCEPTION WHEN insufficient_privilege THEN
+      RAISE WARNING 'could not lock the pg_event_trigger row of event trigger "%"; reading its state without a lock, so a concurrent ALTER EVENT TRIGGER of it is not blocked', v_name;
       SELECT evtenabled INTO v_enabled FROM pg_catalog.pg_event_trigger WHERE evtname = v_name;
     END;
     INSERT INTO pg_temp.__object_reference__event_trigger_state(evtname, evtenabled) VALUES (v_name, v_enabled);
@@ -220,7 +221,8 @@ BEGIN
       FOR UPDATE
     ;
   EXCEPTION WHEN insufficient_privilege THEN
-    -- Without catalog UPDATE rights the row can't be locked; the remaining race needs a concurrent raw ALTER of the same trigger during an administrator's own update.
+    -- Without catalog UPDATE rights the row can't be locked; the race that leaves open needs a concurrent raw ALTER of the same trigger during an administrator's own update.
+    RAISE WARNING 'could not lock the pg_event_trigger row of event trigger "%"; reading its state without a lock, so a concurrent ALTER EVENT TRIGGER of it is not blocked', event_trigger_name;
     SELECT evtenabled INTO v_enabled FROM pg_catalog.pg_event_trigger WHERE evtname = event_trigger_name;
   END;
 

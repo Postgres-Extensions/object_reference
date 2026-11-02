@@ -36,6 +36,7 @@ ok 33 - disable() with unsorted names
 ok 34 - names were processed in "C" collation order, not input order
 ok 35 - enable() after unsorted disable()
 ok 36 - all three restored
+WARNING:  could not lock the pg_event_trigger row of event trigger "event_trigger_disable_test__a"; reading its state without a lock, so a concurrent ALTER EVENT TRIGGER of it is not blocked
 ok 37 - helper does not fail for a role that cannot row-lock the catalog
 ok 38 - helper still returns the trigger's evtenabled
 ok 39 - helper took no advisory lock
