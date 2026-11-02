@@ -1663,6 +1663,14 @@ BEGIN
     ;
   END IF;
 
+  -- Another session's sentinel (or one committed without enable()) would make CREATE EVENT TRIGGER below fail with a plain "already exists".
+  IF EXISTS (SELECT 1 FROM pg_catalog.pg_event_trigger WHERE evtname = '__object_reference__event_trigger_sentinel') THEN
+    RAISE 'event_trigger__disable() from another session is still in effect'
+      USING ERRCODE = 'object_not_in_prerequisite_state'
+        , HINT = 'Wait for that session to finish, or drop event trigger __object_reference__event_trigger_sentinel if it was committed without event_trigger__enable().'
+    ;
+  END IF;
+
   -- The sentinel (see above), before anything is disabled
   CREATE FUNCTION pg_temp.__object_reference__event_trigger_sentinel() RETURNS event_trigger LANGUAGE plpgsql AS 'BEGIN END';
   CREATE EVENT TRIGGER __object_reference__event_trigger_sentinel

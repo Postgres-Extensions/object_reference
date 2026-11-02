@@ -1,5 +1,5 @@
 \set ECHO none
-1..42
+1..46
 ok 1 - manually disable test trigger b ahead of time
 ok 2 - disable() both test triggers
 ok 3 - test trigger a is disabled while a call is in effect
@@ -14,32 +14,36 @@ ok 11 - enable() dropped the sentinel function
 ok 12 - disable() the first time
 ok 13 - a second disable() without enable() in between is rejected
 ok 14 - enable() cleans up so later tests are unaffected
-ok 15 - enable() without disable() is rejected
-ok 16 - disable() rejects an unknown event trigger name
-ok 17 - disable() rejects a duplicate name in its own argument list
-ok 18 - disable() rejects a NULL array
-ok 19 - disable() rejects an empty array
-ok 20 - disable() rejects a NULL element
-ok 21 - disable() so a call is in effect
-ok 22 - duplicate name is reported before the in-effect error
-ok 23 - unknown name is reported before the in-effect error
-ok 24 - NULL array is reported before the in-effect error
-ok 25 - empty array is reported before the in-effect error
-ok 26 - NULL element is reported before the in-effect error
-ok 27 - the call still in effect kept its own state
-ok 28 - enable() ends that call
-ok 29 - disable() with unsorted names
-ok 30 - names were processed in "C" collation order, not input order
-ok 31 - enable() after unsorted disable()
-ok 32 - all three restored
-ok 33 - helper does not fail for a role that cannot row-lock the catalog
-ok 34 - helper still returns the trigger's evtenabled
-ok 35 - helper took no advisory lock
-ok 36 - start a capture group
-ok 37 - disable() zzz_object_reference_capture
-ok 38 - enable() restores zzz_object_reference_capture
-ok 39 - only the table created after enable() was captured
-ok 40 - stop the capture group
-ok 41 - object_reference schema must not be part of the resolved search_path
-ok 42 - _object_reference schema must not be part of the resolved search_path
+ok 15 - disable() rejects an existing sentinel event trigger
+ok 16 - the rejected disable() created no state table
+ok 17 - disable() succeeds once the stray sentinel is gone
+ok 18 - enable() cleans up so later tests are unaffected
+ok 19 - enable() without disable() is rejected
+ok 20 - disable() rejects an unknown event trigger name
+ok 21 - disable() rejects a duplicate name in its own argument list
+ok 22 - disable() rejects a NULL array
+ok 23 - disable() rejects an empty array
+ok 24 - disable() rejects a NULL element
+ok 25 - disable() so a call is in effect
+ok 26 - duplicate name is reported before the in-effect error
+ok 27 - unknown name is reported before the in-effect error
+ok 28 - NULL array is reported before the in-effect error
+ok 29 - empty array is reported before the in-effect error
+ok 30 - NULL element is reported before the in-effect error
+ok 31 - the call still in effect kept its own state
+ok 32 - enable() ends that call
+ok 33 - disable() with unsorted names
+ok 34 - names were processed in "C" collation order, not input order
+ok 35 - enable() after unsorted disable()
+ok 36 - all three restored
+ok 37 - helper does not fail for a role that cannot row-lock the catalog
+ok 38 - helper still returns the trigger's evtenabled
+ok 39 - helper took no advisory lock
+ok 40 - start a capture group
+ok 41 - disable() zzz_object_reference_capture
+ok 42 - enable() restores zzz_object_reference_capture
+ok 43 - only the table created after enable() was captured
+ok 44 - stop the capture group
+ok 45 - object_reference schema must not be part of the resolved search_path
+ok 46 - _object_reference schema must not be part of the resolved search_path
 # TRANSACTION INTENTIONALLY LEFT OPEN!
