@@ -180,8 +180,8 @@ CREATE EXTENSION IF NOT EXISTS count_nulls;
  * Update scenarios. Each installs the old version inside its own
  * transaction and rolls back, so nothing leaks into the committed install
  * below (the extension and its sequences don't exist after the rollback).
- * Each one starts a capture group, asserts the event
- * trigger state it starts the update from, updates, and checks the result:
+ * Each one starts a capture group, asserts the event trigger state it starts
+ * the update from, updates, and checks the result:
  *   1. All three triggers at their default ENABLE; a table created after the
  *      update is captured.
  *   2. zzz__object_reference_drop already disabled, and still disabled after.

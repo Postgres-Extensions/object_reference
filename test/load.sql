@@ -3,12 +3,9 @@
 SET search_path = tap, public;
 
 /*
- * In update and existing modes, test/install/load.sql must have left the
- * extension installed at the version under test (test_update_to if set, else
- * default_version). Raising here fails every test file when it did not, which
- * is what makes `make` fail for a load.sql check that stopped short: the
- * CREATE EXTENSION below would otherwise install the current version fresh
- * and pass, and a version left behind would go unnoticed.
+ * In update and existing modes the extension must be installed at the version
+ * under test; raising here fails every test file otherwise, so `make` fails
+ * when test/install/load.sql stopped short.
  */
 DO $$
 DECLARE
@@ -22,7 +19,7 @@ BEGIN
       , (SELECT default_version FROM pg_catalog.pg_available_extensions WHERE name = 'object_reference')
     );
     IF v_installed IS DISTINCT FROM v_expected THEN
-      RAISE EXCEPTION 'test/install/load.sql left object_reference at version % in % mode, expected %'
+      RAISE EXCEPTION 'object_reference is at version % in % mode, expected %'
         , coalesce(v_installed, '(not installed)'), v_mode, v_expected;
     END IF;
   END IF;

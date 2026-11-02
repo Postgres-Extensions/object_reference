@@ -245,13 +245,12 @@ SELECT is(
 );
 
 /*
- * A role that cannot row-lock pg_event_trigger (as on managed services
- * without true superuser) gets the trigger's state read unlocked, with a
- * WARNING naming the trigger, instead of an error. The DO block runs as that
- * role, and first proves the role really cannot FOR UPDATE the catalog. The
- * WARNING is checked by the expected output: it appears just before the next
- * assertion's line. Terse verbosity keeps the PostgreSQL source location out
- * of that output.
+ * A role without UPDATE on the catalog gets the trigger's state read
+ * unlocked, with a WARNING naming the trigger, instead of an error. The DO
+ * block runs as that role, and first proves the role really cannot FOR UPDATE
+ * the catalog. The WARNING is checked via the expected output, where it
+ * precedes this assertion's `ok` line. Terse verbosity keeps the source
+ * location out of it.
  */
 \set VERBOSITY terse
 SELECT lives_ok(

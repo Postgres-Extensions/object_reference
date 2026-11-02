@@ -1600,7 +1600,7 @@ BEGIN
       FOR UPDATE
     ;
   EXCEPTION WHEN insufficient_privilege THEN
-    -- Without catalog UPDATE rights the row can't be locked; the race that leaves open needs a concurrent raw ALTER of the same trigger during an administrator's own update.
+    -- No catalog UPDATE rights: the row can't be locked.
     RAISE WARNING 'could not lock the pg_event_trigger row of event trigger "%"; reading its state without a lock, so a concurrent ALTER EVENT TRIGGER of it is not blocked', event_trigger_name;
     SELECT evtenabled INTO v_enabled FROM pg_catalog.pg_event_trigger WHERE evtname = event_trigger_name;
   END;
