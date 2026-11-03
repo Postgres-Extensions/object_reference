@@ -32,9 +32,10 @@ SELECT plan(
   +1 -- disable() rejects a duplicate name in its own argument list
   +3 -- disable() rejects a NULL array, an empty array and a NULL element
   +4 -- names passed unsorted are processed in "C" order
+  +2 -- commit check, origin role: the check fails while enable() has not run, also via SET CONSTRAINTS ALL IMMEDIATE
   +2 -- _event_trigger__lock() reads the state unlocked for a role that cannot row-lock the catalog
   +5 -- disabling zzz_object_reference_capture stops capture until enable()
-  +9 -- commit check: a disable() without enable() fails at commit (also under replica), a normal pair does not, and SET CONSTRAINTS ALL IMMEDIATE fails between disable() and enable() and passes after
+  +5 -- commit check, replica role: the check fails while enable() has not run; after enable() it passes and the state table is gone
   +4 -- closing sequence: a stray sentinel event trigger is rejected, no state table is created, disable() succeeds once the stray is dropped, then a nested disable() is rejected
   +2 -- schema-qualification (search_path)
 );
@@ -142,7 +143,7 @@ SELECT throws_ok(
   , 'disable() rejects a NULL element'
 );
 
--- Unsorted input is processed in "C" order
+-- Unsorted input is processed in "C" order; the commit check (origin) piggybacks on this disable()/enable() pair
 SELECT lives_ok(
   $$SELECT _object_reference.event_trigger__disable('{event_trigger_disable_test__z,event_trigger_disable_test__a,"event_trigger_disable_test__B"}')$$
   , 'disable() with unsorted names'
@@ -152,11 +153,24 @@ SELECT results_eq(
   , $$VALUES ('event_trigger_disable_test__B'::name), ('event_trigger_disable_test__a'), ('event_trigger_disable_test__z')$$
   , 'names were processed in "C" collation order, not input order'
 );
+-- SET CONSTRAINTS ... IMMEDIATE runs the same check COMMIT would
+SELECT throws_ok(
+  $$SET CONSTRAINTS pg_temp.__object_reference__event_trigger_state_check IMMEDIATE$$
+  , '55000'
+  , 'transaction committed without event_trigger__enable() after event_trigger__disable()'
+  , 'the commit check fails while enable() has not run'
+);
+SELECT throws_ok(
+  $$SET CONSTRAINTS ALL IMMEDIATE$$
+  , '55000'
+  , 'transaction committed without event_trigger__enable() after event_trigger__disable()'
+  , 'SET CONSTRAINTS ALL IMMEDIATE between disable() and enable() raises'
+);
 SELECT lives_ok(
   $$SELECT _object_reference.event_trigger__enable()$$
   , 'enable() after unsorted disable()'
 );
-SELECT results_eq(
+SELECT bag_eq(
   $$SELECT evtenabled FROM pg_catalog.pg_event_trigger WHERE evtname IN ('event_trigger_disable_test__B', 'event_trigger_disable_test__a', 'event_trigger_disable_test__z')$$
   , $$VALUES ('O'::"char"), ('O'), ('O')$$
   , 'all three restored'
@@ -221,23 +235,7 @@ SELECT lives_ok(
   , 'stop the capture group'
 );
 
--- Commit check: SET CONSTRAINTS ... IMMEDIATE runs the same check COMMIT would
-SELECT lives_ok(
-  $$SELECT _object_reference.event_trigger__disable('{event_trigger_disable_test__a}')$$
-  , 'disable() for the commit check'
-);
-SELECT throws_ok(
-  $$SET CONSTRAINTS pg_temp.__object_reference__event_trigger_state_check IMMEDIATE$$
-  , '55000'
-  , 'transaction committed without event_trigger__enable() after event_trigger__disable()'
-  , 'the commit check fails while enable() has not run'
-);
-SELECT lives_ok(
-  $$SELECT _object_reference.event_trigger__enable()$$
-  , 'enable() after the failed check'
-);
-
--- replica is set before disable(): only ENABLE ALWAYS on the check trigger lets its queued event fire
+-- Commit check, continued: replica is set before disable(), so only ENABLE ALWAYS on the check trigger lets its event be queued
 SET LOCAL session_replication_role = replica;
 SELECT lives_ok(
   $$SELECT _object_reference.event_trigger__disable('{event_trigger_disable_test__a}')$$
@@ -250,15 +248,9 @@ SELECT throws_ok(
   , 'the commit check also fails under session_replication_role = replica'
 );
 SET LOCAL session_replication_role = origin;
-SELECT throws_ok(
-  $$SET CONSTRAINTS ALL IMMEDIATE$$
-  , '55000'
-  , 'transaction committed without event_trigger__enable() after event_trigger__disable()'
-  , 'SET CONSTRAINTS ALL IMMEDIATE between disable() and enable() raises'
-);
 SELECT lives_ok(
   $$SELECT _object_reference.event_trigger__enable()$$
-  , 'enable() after the failed checks'
+  , 'enable() after the replica-role disable()'
 );
 SELECT lives_ok(
   $$SET CONSTRAINTS ALL IMMEDIATE$$
