@@ -1561,27 +1561,8 @@ $body$
 );
 
 /*
- * event_trigger__disable(names) disables the given event triggers, and
- * event_trigger__enable() restores each one's exact prior state. Both are
- * internal: for this extension's own update scripts, not the public API.
- *
- * Avoid disabling event triggers wherever another option exists. The change
- * is transactional: other sessions don't see it until commit, and it rolls
- * back with the caller's transaction, so no cleanup-on-error logic is needed.
- * disable() row-locks each trigger's catalog row before reading its state
- * (see _event_trigger__lock() below), which blocks a concurrent raw ALTER
- * EVENT TRIGGER of the same trigger until commit.
- *
- * disable() also creates a no-op ddl_command_end event trigger, the sentinel,
- * which enable() drops after restoring every state. While every sql_drop,
- * table_rewrite and ddl_command_end event trigger is disabled, Postgres gives
- * the commands nested in an extension script no event trigger state of their
- * own: it collects them onto the enclosing CREATE/ALTER EXTENSION and replays
- * them to that command's ddl_command_end once the triggers are back. There,
- * pg_event_trigger_ddl_commands() fails on objects dropped since (before
- * PostgreSQL 14) or hands capture the script's own objects. One enabled event
- * trigger prevents the collection. The sentinel's function is in pg_temp,
- * which capture skips.
+ * Takes the row lock event_trigger__disable() relies on to block a concurrent raw
+ * ALTER EVENT TRIGGER of the same trigger until commit.
  */
 SELECT __object_reference.create_function(
   '_object_reference._event_trigger__lock'
@@ -1613,8 +1594,33 @@ $body$
 );
 
 /*
- * The caller names the triggers to disable, rather than this disabling all of them, so that no trigger is disabled (or locked) beyond what the caller needs.
- * name[] and "char"[] stand in for %TYPE[], which signatures never accept and PL/pgSQL DECLARE accepts only from PostgreSQL 17.
+ * event_trigger__disable(names) disables the named event triggers, and
+ * event_trigger__enable() restores each one's exact prior state. Both are
+ * internal: for this extension's own update scripts, not the public API.
+ * Avoid disabling event triggers wherever another option exists.
+ *
+ * The caller names the triggers, rather than this disabling all of them, so
+ * that no trigger is disabled (or locked) beyond what the caller needs.
+ *
+ * The change is transactional: other sessions don't see it until commit, and
+ * it rolls back with the caller's transaction, so no cleanup-on-error logic is
+ * needed. disable() locks each trigger's catalog row before reading its state
+ * (_event_trigger__lock()), which blocks a concurrent raw ALTER EVENT TRIGGER
+ * of the same trigger until commit.
+ *
+ * disable() first creates a no-op ddl_command_end event trigger, the sentinel,
+ * which enable() drops after restoring every state. While every sql_drop,
+ * table_rewrite and ddl_command_end event trigger is disabled, Postgres gives
+ * the commands nested in an extension script no event trigger state of their
+ * own: it collects them onto the enclosing CREATE/ALTER EXTENSION and replays
+ * them to that command's ddl_command_end once the triggers are back. There,
+ * pg_event_trigger_ddl_commands() fails on objects dropped since (before
+ * PostgreSQL 14) or hands capture the script's own objects. One enabled event
+ * trigger prevents the collection. The sentinel's function is in pg_temp,
+ * which capture skips.
+ *
+ * name[] and "char"[] stand in for %TYPE[], which signatures never accept and
+ * PL/pgSQL DECLARE accepts only from PostgreSQL 17.
  */
 SELECT __object_reference.create_function(
   '_object_reference.event_trigger__disable'
@@ -1673,7 +1679,7 @@ BEGIN
     ;
   END IF;
 
-  -- The sentinel (see above), before anything is disabled
+  -- The sentinel, before anything is disabled
   CREATE FUNCTION pg_temp.__object_reference__event_trigger_sentinel() RETURNS event_trigger LANGUAGE plpgsql AS 'BEGIN END';
   CREATE EVENT TRIGGER __object_reference__event_trigger_sentinel
     ON ddl_command_end
@@ -1711,7 +1717,7 @@ SELECT __object_reference.create_function(
   , 'void LANGUAGE plpgsql'
   , $body$
 DECLARE
-  -- name[] and "char"[] stand in for %TYPE[], as in disable() above.
+  -- name[] and "char"[] stand in for %TYPE[], as in disable().
   v_names name[];
   v_states "char"[];
   i int;
@@ -1722,7 +1728,11 @@ BEGIN
     ;
   END IF;
 
-  -- Same order disable() locked in
+  /*
+   * Same sorted order disable() locks in: run in a later transaction, these
+   * ALTERs take the row locks again, and one order for every caller prevents
+   * deadlock.
+   */
   SELECT array_agg(evtname ORDER BY evtname COLLATE "C"), array_agg(evtenabled ORDER BY evtname COLLATE "C")
     INTO v_names, v_states
     FROM pg_temp.__object_reference__event_trigger_state
@@ -1744,7 +1754,7 @@ BEGIN
     ));
   END LOOP;
 
-  -- Only now that every state is restored (see the sentinel note above)
+  -- Only now that every state is restored (see the sentinel note above event_trigger__disable())
   DROP EVENT TRIGGER __object_reference__event_trigger_sentinel;
   DROP FUNCTION pg_temp.__object_reference__event_trigger_sentinel();
 END
