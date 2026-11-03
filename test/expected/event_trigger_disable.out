@@ -1,5 +1,5 @@
 \set ECHO none
-1..35
+1..43
 ok 1 - manually disable test trigger b ahead of time
 ok 2 - disable() both test triggers
 ok 3 - test trigger a is disabled while a call is in effect
@@ -29,11 +29,19 @@ ok 26 - disable() zzz_object_reference_capture
 ok 27 - enable() restores zzz_object_reference_capture
 ok 28 - only the table created after enable() was captured
 ok 29 - stop the capture group
-ok 30 - disable() rejects an existing sentinel event trigger
-ok 31 - the rejected disable() created no state table
-ok 32 - disable() succeeds once the stray sentinel is gone
-ok 33 - a second disable() without enable() in between is rejected
-ok 34 - object_reference schema must not be part of the resolved search_path
-ok 35 - _object_reference schema must not be part of the resolved search_path
+ok 30 - disable() for the commit check
+ok 31 - the commit check fails while enable() has not run
+ok 32 - the commit check also fails under session_replication_role = replica
+ok 33 - enable() after the failed check
+ok 34 - the commit check passes after enable() (and leaves ALL IMMEDIATE in force, which the next disable() must tolerate)
+ok 35 - enable() dropped the state table
+ok 36 - disable() again in the same transaction
+ok 37 - enable() again in the same transaction
+ok 38 - disable() rejects an existing sentinel event trigger
+ok 39 - the rejected disable() created no state table
+ok 40 - disable() succeeds once the stray sentinel is gone
+ok 41 - a second disable() without enable() in between is rejected
+ok 42 - object_reference schema must not be part of the resolved search_path
+ok 43 - _object_reference schema must not be part of the resolved search_path
 # TRANSACTION INTENTIONALLY LEFT OPEN!
 # WARNING: this test assumes it runs in a transaction that is never committed; if you ran it by hand in psql, ROLLBACK now.

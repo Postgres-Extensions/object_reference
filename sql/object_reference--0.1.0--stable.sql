@@ -214,6 +214,24 @@ $body$
   , 'Row-lock one event trigger where privileges allow, and return its current evtenabled (NULL if it does not exist).'
 );
 
+SELECT __object_reference.create_function(
+  '_object_reference._event_trigger__state_check'
+  , ''
+  , 'trigger LANGUAGE plpgsql'
+  , $body$
+BEGIN
+  IF EXISTS (SELECT 1 FROM pg_temp.__object_reference__event_trigger_state) THEN
+    RAISE 'transaction committed without event_trigger__enable() after event_trigger__disable()'
+      USING ERRCODE = 'object_not_in_prerequisite_state'
+        , HINT = 'Call _object_reference.event_trigger__enable() before committing.'
+    ;
+  END IF;
+  RETURN NULL;
+END
+$body$
+  , 'Deferred constraint trigger function: fail the commit if event_trigger__enable() has not run.'
+);
+
 /*
  * event_trigger__disable(names) disables the named event triggers, and
  * event_trigger__enable() restores each one's exact prior state. Both are
@@ -225,8 +243,10 @@ $body$
  *
  * The change is transactional: other sessions don't see it until commit, and
  * it commits or rolls back with the caller's transaction. An error in the same
- * transaction needs no cleanup logic; a commit without enable() leaves the
- * triggers disabled, and the saved states are lost when the session ends.
+ * transaction needs no cleanup logic. Committing without calling enable()
+ * raises an error (a deferred constraint trigger on the state table,
+ * _event_trigger__state_check()), so the commit rolls back and the triggers
+ * stay as they were. A hand-run ALTER EVENT TRIGGER is not covered.
  * disable() locks each trigger's catalog row before reading its state
  * (_event_trigger__lock()), which blocks a concurrent raw ALTER EVENT TRIGGER
  * of the same trigger until commit.
@@ -255,6 +275,9 @@ $args$
 DECLARE
   v_name pg_catalog.pg_event_trigger.evtname%TYPE;
   v_enabled pg_catalog.pg_event_trigger.evtenabled%TYPE;
+  -- name[] and "char"[] stand in for %TYPE[], as in the header comment.
+  v_names name[] := '{}';
+  v_states "char"[] := '{}';
 BEGIN
   IF event_trigger_names IS NULL OR coalesce(array_length(event_trigger_names, 1), 0) = 0 THEN
     RAISE 'event_trigger_names must be a non-empty array'
@@ -294,11 +317,11 @@ BEGIN
     ;
   END IF;
 
-  -- A committed sentinel (another session's, or one committed without enable()) would make CREATE EVENT TRIGGER below fail with a plain "already exists".
+  -- A committed sentinel (another session's, or one left by a commit that bypassed the state check) would make CREATE EVENT TRIGGER below fail with a plain "already exists".
   IF EXISTS (SELECT 1 FROM pg_catalog.pg_event_trigger WHERE evtname = '__object_reference__event_trigger_sentinel') THEN
     RAISE 'event_trigger__disable() from another session is still in effect'
       USING ERRCODE = 'object_not_in_prerequisite_state'
-        , HINT = 'Wait for that session to finish, or drop event trigger __object_reference__event_trigger_sentinel if it was committed without event_trigger__enable().'
+        , HINT = 'Wait for that session to finish, or drop event trigger __object_reference__event_trigger_sentinel if it was left behind without event_trigger__enable().'
     ;
   END IF;
 
@@ -327,9 +350,29 @@ BEGIN
 
     PERFORM _object_reference.exec(format('ALTER EVENT TRIGGER %I DISABLE', v_name));
 
-    INSERT INTO pg_temp.__object_reference__event_trigger_state(evtname, evtenabled)
-      VALUES (v_name, v_enabled);
+    v_names := v_names || v_name;
+    v_states := v_states || v_enabled;
   END LOOP;
+
+  /*
+   * Created only now, with the state rows inserted after it: this CREATE fires any
+   * still-enabled capture trigger, which the caller is expected to have named above.
+   * Fails the commit while any state row remains, i.e. enable() has not run.
+   * ENABLE ALWAYS so session_replication_role can't skip it.
+   */
+  CREATE CONSTRAINT TRIGGER __object_reference__event_trigger_state_check
+    AFTER INSERT ON pg_temp.__object_reference__event_trigger_state
+    DEFERRABLE INITIALLY DEFERRED
+    FOR EACH ROW EXECUTE FUNCTION _object_reference._event_trigger__state_check()
+  ;
+  ALTER TABLE pg_temp.__object_reference__event_trigger_state
+    ENABLE ALWAYS TRIGGER __object_reference__event_trigger_state_check
+  ;
+  -- A caller's earlier SET CONSTRAINTS ALL IMMEDIATE would otherwise apply to this new trigger too.
+  SET CONSTRAINTS pg_temp.__object_reference__event_trigger_state_check DEFERRED;
+  INSERT INTO pg_temp.__object_reference__event_trigger_state(evtname, evtenabled)
+    SELECT * FROM unnest(v_names, v_states)
+  ;
 END
 $body$
   , 'Disable the given event triggers, remembering their exact prior state; pair with event_trigger__enable().'
@@ -360,7 +403,12 @@ BEGIN
     FROM pg_temp.__object_reference__event_trigger_state
   ;
 
-  -- Dropped before anything is restored, so this DROP fires none of the restored triggers.
+  /*
+   * Dropped before anything is restored, so this DROP fires none of the restored triggers.
+   * The commit check's pending events make DROP TABLE fail, so empty the table and fire them (harmlessly) first.
+   */
+  DELETE FROM pg_temp.__object_reference__event_trigger_state;
+  SET CONSTRAINTS pg_temp.__object_reference__event_trigger_state_check IMMEDIATE;
   DROP TABLE pg_temp.__object_reference__event_trigger_state;
 
   FOR i IN 1..coalesce(array_length(v_names, 1), 0) LOOP
