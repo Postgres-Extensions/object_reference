@@ -224,10 +224,11 @@ $body$
  * that no trigger is disabled (or locked) beyond what the caller needs.
  *
  * The change is transactional: other sessions don't see it until commit, and
- * it rolls back with the caller's transaction, so no cleanup-on-error logic is
- * needed. disable() locks each trigger's catalog row before reading its state
- * (_event_trigger__lock()), which blocks a concurrent raw ALTER EVENT TRIGGER
- * of the same trigger until commit.
+ * it commits or rolls back with the caller's transaction. An error therefore
+ * needs no cleanup logic, but a caller that commits without calling enable()
+ * leaves the triggers disabled. disable() locks each trigger's catalog row
+ * before reading its state (_event_trigger__lock()), which blocks a concurrent
+ * raw ALTER EVENT TRIGGER of the same trigger until commit.
  *
  * disable() first creates a no-op ddl_command_end event trigger, the sentinel,
  * which enable() drops after restoring every state. While every sql_drop,
