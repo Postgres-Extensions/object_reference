@@ -1601,7 +1601,7 @@ BEGIN
     ;
   EXCEPTION WHEN insufficient_privilege THEN
     -- No catalog UPDATE rights: the row can't be locked.
-    RAISE WARNING 'could not lock the pg_event_trigger row of event trigger "%"; reading its state without a lock, so a concurrent ALTER EVENT TRIGGER of it is not blocked', event_trigger_name;
+    RAISE WARNING 'could not lock the pg_event_trigger row of event trigger "%"; reading its state without a lock, so races with ALTER EVENT TRIGGER are possible', event_trigger_name;
     SELECT evtenabled INTO v_enabled FROM pg_catalog.pg_event_trigger WHERE evtname = event_trigger_name;
   END;
 
@@ -1612,7 +1612,10 @@ $body$
   , 'Row-lock one event trigger where privileges allow, and return its current evtenabled (NULL if it does not exist).'
 );
 
--- name[] and "char"[] stand in for %TYPE[], which signatures never accept and PL/pgSQL DECLARE accepts only from PostgreSQL 17.
+/*
+ * The caller names the triggers to disable, rather than this disabling all of them, so that no trigger is disabled (or locked) beyond what the caller needs.
+ * name[] and "char"[] stand in for %TYPE[], which signatures never accept and PL/pgSQL DECLARE accepts only from PostgreSQL 17.
+ */
 SELECT __object_reference.create_function(
   '_object_reference.event_trigger__disable'
   , $args$
@@ -1624,7 +1627,6 @@ DECLARE
   v_name pg_catalog.pg_event_trigger.evtname%TYPE;
   v_enabled pg_catalog.pg_event_trigger.evtenabled%TYPE;
 BEGIN
-  -- Validate everything before any side effect.
   IF event_trigger_names IS NULL OR coalesce(array_length(event_trigger_names, 1), 0) = 0 THEN
     RAISE 'event_trigger_names must be a non-empty array'
       USING ERRCODE = 'invalid_parameter_value'
@@ -1648,7 +1650,6 @@ BEGIN
   SELECT n INTO v_name
     FROM unnest(event_trigger_names) n
     WHERE NOT EXISTS (SELECT 1 FROM pg_catalog.pg_event_trigger WHERE evtname = n)
-    ORDER BY n COLLATE "C"
     LIMIT 1
   ;
   IF FOUND THEN
@@ -1684,7 +1685,7 @@ BEGIN
   ;
   ALTER TABLE pg_temp.__object_reference__event_trigger_state ADD PRIMARY KEY (evtname);
 
-  -- Fixed lock order across all callers, to avoid deadlock.
+  -- Sorting in "C" collation gives every caller the same lock order, so two callers (ourselves included) can't deadlock on each other's triggers.
   FOR v_name IN SELECT n FROM unnest(event_trigger_names) n ORDER BY n COLLATE "C" LOOP
     v_enabled := _object_reference._event_trigger__lock(v_name);
 
@@ -1695,10 +1696,10 @@ BEGIN
       ;
     END IF;
 
+    PERFORM _object_reference.exec(format('ALTER EVENT TRIGGER %I DISABLE', v_name));
+
     INSERT INTO pg_temp.__object_reference__event_trigger_state(evtname, evtenabled)
       VALUES (v_name, v_enabled);
-
-    PERFORM _object_reference.exec(format('ALTER EVENT TRIGGER %I DISABLE', v_name));
   END LOOP;
 END
 $body$
