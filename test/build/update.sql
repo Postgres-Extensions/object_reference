@@ -2,8 +2,8 @@
 /*
  * Update-mode scenarios (make test-update): install the old version, then
  * ALTER EXTENSION UPDATE, in rolled-back transactions, so nothing persists.
- * Each starts a capture group, asserts the event trigger state it starts the
- * update from, updates, and checks the result:
+ * Scenarios 1-3 start a capture group; each asserts the event trigger state it
+ * starts the update from, updates, and checks the result:
  *   1. All three triggers at their default ENABLE; a table created after the
  *      update is captured.
  *   2. zzz__object_reference_drop already disabled, and still disabled after.
