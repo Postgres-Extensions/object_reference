@@ -1729,9 +1729,8 @@ BEGIN
   END IF;
 
   /*
-   * Same sorted order disable() locks in: run in a later transaction, these
-   * ALTERs take the row locks again, and one order for every caller prevents
-   * deadlock.
+   * Same sorted order as disable(): if run in a later transaction, these ALTERs
+   * re-take the row locks, and one order for every caller prevents deadlock.
    */
   SELECT array_agg(evtname ORDER BY evtname COLLATE "C"), array_agg(evtenabled ORDER BY evtname COLLATE "C")
     INTO v_names, v_states
