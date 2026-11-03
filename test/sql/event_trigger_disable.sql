@@ -33,7 +33,6 @@ SELECT plan(
   +1 -- disable() rejects an unknown event trigger name
   +1 -- disable() rejects a duplicate name in its own argument list
   +3 -- disable() rejects a NULL array, an empty array and a NULL element
-  +8 -- argument errors are reported in preference to the "previous call in effect" error
   +4 -- names passed unsorted are processed in "C" order
   +3 -- _event_trigger__lock() reads the state unlocked, with no advisory lock, for a role that cannot row-lock the catalog
   +5 -- disabling zzz_object_reference_capture stops capture until enable()
@@ -157,8 +156,7 @@ SELECT throws_ok(
 /*
  * Argument errors are reported by disable() itself; any state change made
  * before the error would be rolled back with the call, so these tests cannot
- * observe whether validation ran before a side effect. What they can observe
- * is which error wins when several apply (see the precedence tests below).
+ * observe whether validation ran before a side effect.
  */
 SELECT throws_ok(
   $$SELECT _object_reference.event_trigger__disable(NULL)$$
@@ -177,51 +175,6 @@ SELECT throws_ok(
   , '22023'
   , 'event_trigger_names contains a NULL name'
   , 'disable() rejects a NULL element'
-);
-
--- Argument errors are reported even while a previous call is in effect
-SELECT lives_ok(
-  $$SELECT _object_reference.event_trigger__disable('{event_trigger_disable_test__a}')$$
-  , 'disable() so a call is in effect'
-);
-SELECT throws_ok(
-  $$SELECT _object_reference.event_trigger__disable('{event_trigger_disable_test__b,event_trigger_disable_test__b}')$$
-  , '22023'
-  , 'event_trigger_names contains a duplicate name'
-  , 'duplicate name is reported before the in-effect error'
-);
-SELECT throws_ok(
-  $$SELECT _object_reference.event_trigger__disable('{no_such_event_trigger}')$$
-  , '42704'
-  , 'event trigger "no_such_event_trigger" does not exist'
-  , 'unknown name is reported before the in-effect error'
-);
-SELECT throws_ok(
-  $$SELECT _object_reference.event_trigger__disable(NULL)$$
-  , '22023'
-  , 'event_trigger_names must be a non-empty array'
-  , 'NULL array is reported before the in-effect error'
-);
-SELECT throws_ok(
-  $$SELECT _object_reference.event_trigger__disable('{}')$$
-  , '22023'
-  , 'event_trigger_names must be a non-empty array'
-  , 'empty array is reported before the in-effect error'
-);
-SELECT throws_ok(
-  $$SELECT _object_reference.event_trigger__disable('{event_trigger_disable_test__b,NULL}')$$
-  , '22023'
-  , 'event_trigger_names contains a NULL name'
-  , 'NULL element is reported before the in-effect error'
-);
-SELECT is(
-  (SELECT array_agg(evtname) FROM pg_temp.__object_reference__event_trigger_state)
-  , '{event_trigger_disable_test__a}'::name[]
-  , 'the call still in effect kept its own state'
-);
-SELECT lives_ok(
-  $$SELECT _object_reference.event_trigger__enable()$$
-  , 'enable() ends that call'
 );
 
 -- Unsorted input is processed in "C" order

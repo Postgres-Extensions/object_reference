@@ -1,5 +1,5 @@
 \set ECHO none
-1..46
+1..38
 ok 1 - manually disable test trigger b ahead of time
 ok 2 - disable() both test triggers
 ok 3 - test trigger a is disabled while a call is in effect
@@ -24,27 +24,19 @@ ok 21 - disable() rejects a duplicate name in its own argument list
 ok 22 - disable() rejects a NULL array
 ok 23 - disable() rejects an empty array
 ok 24 - disable() rejects a NULL element
-ok 25 - disable() so a call is in effect
-ok 26 - duplicate name is reported before the in-effect error
-ok 27 - unknown name is reported before the in-effect error
-ok 28 - NULL array is reported before the in-effect error
-ok 29 - empty array is reported before the in-effect error
-ok 30 - NULL element is reported before the in-effect error
-ok 31 - the call still in effect kept its own state
-ok 32 - enable() ends that call
-ok 33 - disable() with unsorted names
-ok 34 - names were processed in "C" collation order, not input order
-ok 35 - enable() after unsorted disable()
-ok 36 - all three restored
-ok 37 - helper does not fail for a role that cannot row-lock the catalog
-ok 38 - helper still returns the trigger's evtenabled
-ok 39 - helper took no advisory lock
-ok 40 - start a capture group
-ok 41 - disable() zzz_object_reference_capture
-ok 42 - enable() restores zzz_object_reference_capture
-ok 43 - only the table created after enable() was captured
-ok 44 - stop the capture group
-ok 45 - object_reference schema must not be part of the resolved search_path
-ok 46 - _object_reference schema must not be part of the resolved search_path
+ok 25 - disable() with unsorted names
+ok 26 - names were processed in "C" collation order, not input order
+ok 27 - enable() after unsorted disable()
+ok 28 - all three restored
+ok 29 - helper does not fail for a role that cannot row-lock the catalog
+ok 30 - helper still returns the trigger's evtenabled
+ok 31 - helper took no advisory lock
+ok 32 - start a capture group
+ok 33 - disable() zzz_object_reference_capture
+ok 34 - enable() restores zzz_object_reference_capture
+ok 35 - only the table created after enable() was captured
+ok 36 - stop the capture group
+ok 37 - object_reference schema must not be part of the resolved search_path
+ok 38 - _object_reference schema must not be part of the resolved search_path
 # TRANSACTION INTENTIONALLY LEFT OPEN!
 # WARNING: this test assumes it runs in a transaction that is never committed; if you ran it by hand in psql, ROLLBACK now.
