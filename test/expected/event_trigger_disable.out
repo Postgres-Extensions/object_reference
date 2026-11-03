@@ -1,5 +1,5 @@
 \set ECHO none
-1..46
+1..44
 ok 1 - manually disable test trigger b ahead of time
 ok 2 - disable() both test triggers
 ok 3 - test trigger a is disabled while a call is in effect
@@ -34,17 +34,15 @@ ok 31 - the commit check fails while enable() has not run
 ok 32 - enable() after the failed check
 ok 33 - disable() under session_replication_role = replica
 ok 34 - the commit check also fails under session_replication_role = replica
-ok 35 - enable() after the replica check
-ok 36 - the commit check passes after enable()
-ok 37 - enable() dropped the state table
-ok 38 - disable() again after SET CONSTRAINTS ALL IMMEDIATE (the check trigger must start out deferred)
-ok 39 - SET CONSTRAINTS ALL IMMEDIATE between disable() and enable() raises
-ok 40 - enable() again in the same transaction
-ok 41 - disable() rejects an existing sentinel event trigger
-ok 42 - the rejected disable() created no state table
-ok 43 - disable() succeeds once the stray sentinel is gone
-ok 44 - a second disable() without enable() in between is rejected
-ok 45 - object_reference schema must not be part of the resolved search_path
-ok 46 - _object_reference schema must not be part of the resolved search_path
+ok 35 - SET CONSTRAINTS ALL IMMEDIATE between disable() and enable() raises
+ok 36 - enable() after the failed checks
+ok 37 - the commit check passes after enable()
+ok 38 - enable() dropped the state table
+ok 39 - disable() rejects an existing sentinel event trigger
+ok 40 - the rejected disable() created no state table
+ok 41 - disable() succeeds once the stray sentinel is gone (also after SET CONSTRAINTS ALL IMMEDIATE: the check trigger starts out deferred)
+ok 42 - a second disable() without enable() in between is rejected
+ok 43 - object_reference schema must not be part of the resolved search_path
+ok 44 - _object_reference schema must not be part of the resolved search_path
 # TRANSACTION INTENTIONALLY LEFT OPEN!
 # WARNING: this test assumes it runs in a transaction that is never committed; if you ran it by hand in psql, ROLLBACK now.

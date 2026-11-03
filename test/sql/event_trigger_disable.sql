@@ -34,7 +34,7 @@ SELECT plan(
   +4 -- names passed unsorted are processed in "C" order
   +3 -- _event_trigger__lock() reads the state unlocked, with no advisory lock, for a role that cannot row-lock the catalog
   +5 -- disabling zzz_object_reference_capture stops capture until enable()
-  +11 -- commit check: a disable() without enable() fails at commit (also under replica), a normal pair does not, and a later disable()/enable() cycle works
+  +9 -- commit check: a disable() without enable() fails at commit (also under replica), a normal pair does not, and SET CONSTRAINTS ALL IMMEDIATE fails between disable() and enable() and passes after
   +4 -- closing sequence: a stray sentinel event trigger is rejected, no state table is created, disable() succeeds once the stray is dropped, then a nested disable() is rejected
   +2 -- schema-qualification (search_path)
 );
@@ -63,8 +63,10 @@ SELECT is(
   , 'ddl_command_end O'
   , 'the sentinel event trigger is enabled on ddl_command_end while a call is in effect'
 );
-SELECT ok(
-  to_regprocedure('pg_temp.__object_reference__event_trigger_sentinel()') IS NOT NULL
+SELECT has_function(
+  (SELECT nspname FROM pg_catalog.pg_namespace WHERE oid = pg_catalog.pg_my_temp_schema())
+  , '__object_reference__event_trigger_sentinel'
+  , '{}'::name[]
   , 'the sentinel function exists while a call is in effect'
 );
 SELECT lives_ok(
@@ -85,8 +87,10 @@ SELECT ok(
   NOT EXISTS (SELECT 1 FROM pg_catalog.pg_event_trigger WHERE evtname = '__object_reference__event_trigger_sentinel')
   , 'enable() dropped the sentinel event trigger'
 );
-SELECT ok(
-  to_regprocedure('pg_temp.__object_reference__event_trigger_sentinel()') IS NULL
+SELECT hasnt_function(
+  (SELECT nspname FROM pg_catalog.pg_namespace WHERE oid = pg_catalog.pg_my_temp_schema())
+  , '__object_reference__event_trigger_sentinel'
+  , '{}'::name[]
   , 'enable() dropped the sentinel function'
 );
 
@@ -143,18 +147,18 @@ SELECT lives_ok(
   $$SELECT _object_reference.event_trigger__disable('{event_trigger_disable_test__z,event_trigger_disable_test__a,"event_trigger_disable_test__B"}')$$
   , 'disable() with unsorted names'
 );
-SELECT is(
-  (SELECT array_agg(evtname ORDER BY ctid) FROM pg_temp.__object_reference__event_trigger_state)
-  , '{event_trigger_disable_test__B,event_trigger_disable_test__a,event_trigger_disable_test__z}'::name[]
+SELECT results_eq(
+  $$SELECT evtname FROM pg_temp.__object_reference__event_trigger_state ORDER BY ctid$$
+  , $$VALUES ('event_trigger_disable_test__B'::name), ('event_trigger_disable_test__a'), ('event_trigger_disable_test__z')$$
   , 'names were processed in "C" collation order, not input order'
 );
 SELECT lives_ok(
   $$SELECT _object_reference.event_trigger__enable()$$
   , 'enable() after unsorted disable()'
 );
-SELECT is(
-  (SELECT array_agg(evtenabled ORDER BY evtname COLLATE "C") FROM pg_catalog.pg_event_trigger WHERE evtname LIKE 'event\_trigger\_disable\_test\_\_%' AND evtname IN ('event_trigger_disable_test__B', 'event_trigger_disable_test__a', 'event_trigger_disable_test__z'))
-  , '{O,O,O}'::"char"[]
+SELECT results_eq(
+  $$SELECT evtenabled FROM pg_catalog.pg_event_trigger WHERE evtname IN ('event_trigger_disable_test__B', 'event_trigger_disable_test__a', 'event_trigger_disable_test__z')$$
+  , $$VALUES ('O'::"char"), ('O'), ('O')$$
   , 'all three restored'
 );
 
@@ -162,8 +166,7 @@ SELECT is(
  * A role without UPDATE on the catalog gets the trigger's state read
  * unlocked, with a WARNING naming the trigger, instead of an error. The DO
  * block runs as that role, and first proves the role really cannot FOR UPDATE
- * the catalog. The WARNING is suppressed because whether it is raised depends
- * on the environment's catalog privileges.
+ * the catalog. The WARNING is suppressed to keep it out of the expected output.
  */
 SELECT current_setting('client_min_messages') AS saved_client_min_messages \gset
 SET client_min_messages = error;
@@ -210,12 +213,12 @@ SELECT lives_ok(
   , 'enable() restores zzz_object_reference_capture'
 );
 CREATE TABLE public.event_trigger_disable_test__after_enable();
-SELECT is(
-  (SELECT array_agg(array_to_string(o.object_names, '.') ORDER BY o.object_names)
+SELECT results_eq(
+  $$SELECT array_to_string(o.object_names, '.')
     FROM _object_reference.object_group__object m
       JOIN _object_reference.object o USING (object_id)
-    WHERE m.object_group_id = (object_reference.object_group__get('event_trigger_disable_test_group')).object_group_id)
-  , '{public.event_trigger_disable_test__after_enable}'::text[]
+    WHERE m.object_group_id = (object_reference.object_group__get('event_trigger_disable_test_group')).object_group_id$$
+  , $$VALUES ('public.event_trigger_disable_test__after_enable')$$
   , 'only the table created after enable() was captured'
 );
 SELECT lives_ok(
@@ -252,23 +255,6 @@ SELECT throws_ok(
   , 'the commit check also fails under session_replication_role = replica'
 );
 SET LOCAL session_replication_role = origin;
-SELECT lives_ok(
-  $$SELECT _object_reference.event_trigger__enable()$$
-  , 'enable() after the replica check'
-);
-SELECT lives_ok(
-  $$SET CONSTRAINTS ALL IMMEDIATE$$
-  , 'the commit check passes after enable()'
-);
-SELECT is(
-  to_regclass('pg_temp.__object_reference__event_trigger_state')
-  , NULL
-  , 'enable() dropped the state table'
-);
-SELECT lives_ok(
-  $$SELECT _object_reference.event_trigger__disable('{event_trigger_disable_test__a}')$$
-  , 'disable() again after SET CONSTRAINTS ALL IMMEDIATE (the check trigger must start out deferred)'
-);
 SELECT throws_ok(
   $$SET CONSTRAINTS ALL IMMEDIATE$$
   , '55000'
@@ -277,7 +263,15 @@ SELECT throws_ok(
 );
 SELECT lives_ok(
   $$SELECT _object_reference.event_trigger__enable()$$
-  , 'enable() again in the same transaction'
+  , 'enable() after the failed checks'
+);
+SELECT lives_ok(
+  $$SET CONSTRAINTS ALL IMMEDIATE$$
+  , 'the commit check passes after enable()'
+);
+SELECT hasnt_table(
+  '__object_reference__event_trigger_state'
+  , 'enable() dropped the state table'
 );
 
 -- Must stay last: this sequence leaves a disable() call in effect.
@@ -288,15 +282,14 @@ SELECT throws_ok(
   , 'event_trigger__disable() from another session is still in effect'
   , 'disable() rejects an existing sentinel event trigger'
 );
-SELECT is(
-  to_regclass('pg_temp.__object_reference__event_trigger_state')
-  , NULL
+SELECT hasnt_table(
+  '__object_reference__event_trigger_state'
   , 'the rejected disable() created no state table'
 );
 DROP EVENT TRIGGER __object_reference__event_trigger_sentinel;
 SELECT lives_ok(
   $$SELECT _object_reference.event_trigger__disable('{event_trigger_disable_test__a}')$$
-  , 'disable() succeeds once the stray sentinel is gone'
+  , 'disable() succeeds once the stray sentinel is gone (also after SET CONSTRAINTS ALL IMMEDIATE: the check trigger starts out deferred)'
 );
 SELECT throws_ok(
   $$SELECT _object_reference.event_trigger__disable('{event_trigger_disable_test__a}')$$
