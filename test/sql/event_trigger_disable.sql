@@ -4,8 +4,7 @@
 
 /*
  * This file assumes its transaction is never committed (test/load.sql opens
- * it, test/finish.sql leaves it open; committing would fail anyway, as the
- * last test leaves a disable() call without its enable()) and that pg_regress runs the test files
+ * it, test/finish.sql leaves it open) and that pg_regress runs the test files
  * one at a time, so no other session ever sees an event trigger disabled here.
  * Most tests use their own no-op event triggers, whose names and prior states
  * they control; the capture test disables the real zzz_object_reference_capture.
@@ -35,7 +34,7 @@ SELECT plan(
   +4 -- names passed unsorted are processed in "C" order
   +3 -- _event_trigger__lock() reads the state unlocked, with no advisory lock, for a role that cannot row-lock the catalog
   +5 -- disabling zzz_object_reference_capture stops capture until enable()
-  +8 -- commit check: a disable() without enable() fails at commit (also under replica), a normal pair does not, and a later disable()/enable() cycle works
+  +10 -- commit check: a disable() without enable() fails at commit (also under replica), a normal pair does not, and a later disable()/enable() cycle works
   +4 -- closing sequence: a stray sentinel event trigger is rejected, no state table is created, disable() succeeds once the stray is dropped, then a nested disable() is rejected
   +2 -- schema-qualification (search_path)
 );
@@ -235,7 +234,17 @@ SELECT throws_ok(
   , 'transaction committed without event_trigger__enable() after event_trigger__disable()'
   , 'the commit check fails while enable() has not run'
 );
+SELECT lives_ok(
+  $$SELECT _object_reference.event_trigger__enable()$$
+  , 'enable() after the failed check'
+);
+
+-- replica is set before disable(): only ENABLE ALWAYS on the check trigger lets its queued event fire
 SET LOCAL session_replication_role = replica;
+SELECT lives_ok(
+  $$SELECT _object_reference.event_trigger__disable('{event_trigger_disable_test__a}')$$
+  , 'disable() under session_replication_role = replica'
+);
 SELECT throws_ok(
   $$SET CONSTRAINTS pg_temp.__object_reference__event_trigger_state_check IMMEDIATE$$
   , '55000'
@@ -245,7 +254,7 @@ SELECT throws_ok(
 SET LOCAL session_replication_role = origin;
 SELECT lives_ok(
   $$SELECT _object_reference.event_trigger__enable()$$
-  , 'enable() after the failed check'
+  , 'enable() after the replica check'
 );
 SELECT lives_ok(
   $$SET CONSTRAINTS ALL IMMEDIATE$$

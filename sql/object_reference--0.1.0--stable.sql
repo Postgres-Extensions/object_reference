@@ -241,15 +241,18 @@ $body$
  * The caller names the triggers, rather than this disabling all of them, so
  * that no trigger is disabled (or locked) beyond what the caller needs.
  *
- * The change is transactional: other sessions don't see it until commit, and
- * it commits or rolls back with the caller's transaction. An error in the same
- * transaction needs no cleanup logic. Committing without calling enable()
+ * Call enable() in the same transaction as disable(): committing without it
  * raises an error (a deferred constraint trigger on the state table,
  * _event_trigger__state_check()), so the commit rolls back and the triggers
- * stay as they were. A hand-run ALTER EVENT TRIGGER is not covered.
- * disable() locks each trigger's catalog row before reading its state
- * (_event_trigger__lock()), which blocks a concurrent raw ALTER EVENT TRIGGER
- * of the same trigger until commit.
+ * stay as they were. The disable therefore never becomes visible to other
+ * sessions, and an error needs no cleanup logic. A hand-run ALTER EVENT TRIGGER
+ * is not covered. disable() locks each trigger's catalog row before reading
+ * its state (_event_trigger__lock()), which blocks a concurrent raw ALTER EVENT
+ * TRIGGER of the same trigger until the transaction ends.
+ *
+ * If a capture group is active, include zzz_object_reference_capture in the
+ * names: disable() creates the check trigger (a CREATE, which capture records
+ * unless disabled), and capture does not skip it.
  *
  * disable() first creates a no-op ddl_command_end event trigger, the sentinel,
  * which enable() drops after restoring every state. While every sql_drop,
@@ -355,10 +358,10 @@ BEGIN
   END LOOP;
 
   /*
-   * Created only now, with the state rows inserted after it: this CREATE fires any
-   * still-enabled capture trigger, which the caller is expected to have named above.
    * Fails the commit while any state row remains, i.e. enable() has not run.
-   * ENABLE ALWAYS so session_replication_role can't skip it.
+   * ENABLE ALWAYS so session_replication_role can't skip it. Created after the
+   * disable loop, and the state rows go in after it: this CREATE fires any
+   * still-enabled capture trigger, which the caller is expected to have named above.
    */
   CREATE CONSTRAINT TRIGGER __object_reference__event_trigger_state_check
     AFTER INSERT ON pg_temp.__object_reference__event_trigger_state
@@ -395,8 +398,8 @@ BEGIN
   END IF;
 
   /*
-   * Same sorted order as disable(): if run in a later transaction, these ALTERs
-   * re-take the row locks, and one order for every caller prevents deadlock.
+   * Same sorted order as disable(): these ALTERs take the row locks again, and
+   * one order for every caller prevents deadlock.
    */
   SELECT array_agg(evtname ORDER BY evtname COLLATE "C"), array_agg(evtenabled ORDER BY evtname COLLATE "C")
     INTO v_names, v_states
@@ -406,9 +409,16 @@ BEGIN
   /*
    * Dropped before anything is restored, so this DROP fires none of the restored triggers.
    * The commit check's pending events make DROP TABLE fail, so empty the table and fire them (harmlessly) first.
+   * The update script's hand-written disable creates the table without the check trigger.
    */
-  DELETE FROM pg_temp.__object_reference__event_trigger_state;
-  SET CONSTRAINTS pg_temp.__object_reference__event_trigger_state_check IMMEDIATE;
+  IF EXISTS (
+    SELECT 1 FROM pg_catalog.pg_trigger
+      WHERE tgrelid = 'pg_temp.__object_reference__event_trigger_state'::regclass
+        AND tgname = '__object_reference__event_trigger_state_check'
+  ) THEN
+    DELETE FROM pg_temp.__object_reference__event_trigger_state;
+    SET CONSTRAINTS pg_temp.__object_reference__event_trigger_state_check IMMEDIATE;
+  END IF;
   DROP TABLE pg_temp.__object_reference__event_trigger_state;
 
   FOR i IN 1..coalesce(array_length(v_names, 1), 0) LOOP
