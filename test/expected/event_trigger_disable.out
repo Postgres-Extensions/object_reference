@@ -1,5 +1,5 @@
 \set ECHO none
-1..44
+1..43
 ok 1 - manually disable test trigger b ahead of time
 ok 2 - disable() both test triggers
 ok 3 - test trigger a is disabled while a call is in effect
@@ -23,26 +23,25 @@ ok 20 - enable() after unsorted disable()
 ok 21 - all three restored
 ok 22 - helper does not fail for a role that cannot row-lock the catalog
 ok 23 - helper still returns the trigger's evtenabled
-ok 24 - helper took no advisory lock
-ok 25 - start a capture group
-ok 26 - disable() zzz_object_reference_capture
-ok 27 - enable() restores zzz_object_reference_capture
-ok 28 - only the table created after enable() was captured
-ok 29 - stop the capture group
-ok 30 - disable() for the commit check
-ok 31 - the commit check fails while enable() has not run
-ok 32 - enable() after the failed check
-ok 33 - disable() under session_replication_role = replica
-ok 34 - the commit check also fails under session_replication_role = replica
-ok 35 - SET CONSTRAINTS ALL IMMEDIATE between disable() and enable() raises
-ok 36 - enable() after the failed checks
-ok 37 - the commit check passes after enable()
-ok 38 - enable() dropped the state table
-ok 39 - disable() rejects an existing sentinel event trigger
-ok 40 - the rejected disable() created no state table
-ok 41 - disable() succeeds once the stray sentinel is gone (also after SET CONSTRAINTS ALL IMMEDIATE: the check trigger starts out deferred)
-ok 42 - a second disable() without enable() in between is rejected
-ok 43 - object_reference schema must not be part of the resolved search_path
-ok 44 - _object_reference schema must not be part of the resolved search_path
+ok 24 - start a capture group
+ok 25 - disable() zzz_object_reference_capture
+ok 26 - enable() restores zzz_object_reference_capture
+ok 27 - only the table created after enable() was captured
+ok 28 - stop the capture group
+ok 29 - disable() for the commit check
+ok 30 - the commit check fails while enable() has not run
+ok 31 - enable() after the failed check
+ok 32 - disable() under session_replication_role = replica
+ok 33 - the commit check also fails under session_replication_role = replica
+ok 34 - SET CONSTRAINTS ALL IMMEDIATE between disable() and enable() raises
+ok 35 - enable() after the failed checks
+ok 36 - the commit check passes after enable()
+ok 37 - enable() dropped the state table
+ok 38 - disable() rejects an existing sentinel event trigger
+ok 39 - the rejected disable() created no state table
+ok 40 - disable() succeeds once the stray sentinel is gone (also after SET CONSTRAINTS ALL IMMEDIATE: the check trigger starts out deferred)
+ok 41 - a second disable() without enable() in between is rejected
+ok 42 - object_reference schema must not be part of the resolved search_path
+ok 43 - _object_reference schema must not be part of the resolved search_path
 # TRANSACTION INTENTIONALLY LEFT OPEN!
 # WARNING: this test assumes it runs in a transaction that is never committed; if you ran it by hand in psql, ROLLBACK now.

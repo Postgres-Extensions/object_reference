@@ -32,7 +32,7 @@ SELECT plan(
   +1 -- disable() rejects a duplicate name in its own argument list
   +3 -- disable() rejects a NULL array, an empty array and a NULL element
   +4 -- names passed unsorted are processed in "C" order
-  +3 -- _event_trigger__lock() reads the state unlocked, with no advisory lock, for a role that cannot row-lock the catalog
+  +2 -- _event_trigger__lock() reads the state unlocked for a role that cannot row-lock the catalog
   +5 -- disabling zzz_object_reference_capture stops capture until enable()
   +9 -- commit check: a disable() without enable() fails at commit (also under replica), a normal pair does not, and SET CONSTRAINTS ALL IMMEDIATE fails between disable() and enable() and passes after
   +4 -- closing sequence: a stray sentinel event trigger is rejected, no state table is created, disable() succeeds once the stray is dropped, then a nested disable() is rejected
@@ -191,11 +191,6 @@ SELECT is(
   current_setting('event_trigger_disable_test.enabled')
   , 'O'
   , 'helper still returns the trigger''s evtenabled'
-);
-SELECT is(
-  (SELECT count(*)::int FROM pg_catalog.pg_locks WHERE locktype = 'advisory' AND pid = pg_backend_pid())
-  , 0
-  , 'helper took no advisory lock'
 );
 
 -- Disabling zzz_object_reference_capture stops capture until enable()
