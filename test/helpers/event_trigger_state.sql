@@ -1,6 +1,6 @@
 /*
  * Asserts the enabled state of the extension's three event triggers (used by
- * the update-mode checks in test/install/load.sql and test/build/update.sql).
+ * test/build/update.sql).
  */
 CREATE FUNCTION pg_temp.assert_event_trigger_state(
   step text

@@ -9,6 +9,8 @@
  *   2. zzz__object_reference_drop already disabled, and still disabled after.
  *   3. A table captured before the update is renamed after it; the capture
  *      group shows the new name.
+ *   4. The three triggers start as DISABLE, ENABLE REPLICA and ENABLE ALWAYS
+ *      and must be restored to exactly those states.
  *
  * Runs only when object_reference.test_load_mode is 'update' (the Makefile's
  * TEST_LOAD_SOURCE); the output is empty in every mode, so a failed assertion
@@ -140,6 +142,19 @@ SELECT pg_temp.assert_update_finished('after the update in scenario 3');
 SELECT pg_temp.assert_event_trigger_state('after the update in scenario 3', 'O', 'O', 'O');
 ALTER TABLE load_update_scenario__before RENAME TO load_update_scenario__renamed;
 SELECT pg_temp.assert_capture_group('after the rename in scenario 3', '{public.load_update_scenario__renamed}');
+ROLLBACK;
+
+BEGIN;
+SELECT pg_temp.quiet_cat_tools();
+CREATE EXTENSION IF NOT EXISTS count_nulls;
+CREATE EXTENSION object_reference VERSION :'object_reference_test_update_from' CASCADE;
+ALTER EVENT TRIGGER zzz_object_reference_capture DISABLE;
+ALTER EVENT TRIGGER zzz_object_reference__fix_identity ENABLE REPLICA;
+ALTER EVENT TRIGGER zzz__object_reference_drop ENABLE ALWAYS;
+SELECT pg_temp.assert_event_trigger_state('before the update in scenario 4', 'D', 'R', 'A');
+ALTER EXTENSION object_reference UPDATE :object_reference_update_to_clause;
+SELECT pg_temp.assert_update_finished('after the update in scenario 4');
+SELECT pg_temp.assert_event_trigger_state('after the update in scenario 4', 'D', 'R', 'A');
 ROLLBACK;
 
 \o

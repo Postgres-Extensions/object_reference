@@ -176,29 +176,9 @@ SELECT CASE WHEN :'object_reference_test_update_to' = '' THEN ''
  */
 CREATE EXTENSION IF NOT EXISTS count_nulls;
 
-\i test/helpers/event_trigger_state.sql
-
 SET client_min_messages = WARNING;
 
 CREATE EXTENSION object_reference VERSION :'object_reference_test_update_from' CASCADE;
-
-/*
- * This check fails only this load.sql run: pgxntool ignores installcheck's exit
- * status and fails `make test` only when regression.diffs exists, and this
- * file's output is never compared (pg_regress 16+ prints "not ok" for it,
- * PG12's prints "ok"). make fails because the failed transaction leaves the
- * extension at test_update_from, and test/load.sql then raises in every later
- * test file, as the installed version is not the one under test.
- *
- * It fails this load.sql run unless the update restores each of the
- * extension's event triggers to the exact state it had before, starting each
- * from a distinct non-default state. All three are reset to ENABLE afterwards,
- * so the rest of the suite runs as usual.
- */
-BEGIN;
-ALTER EVENT TRIGGER zzz_object_reference_capture DISABLE;
-ALTER EVENT TRIGGER zzz_object_reference__fix_identity ENABLE REPLICA;
-ALTER EVENT TRIGGER zzz__object_reference_drop ENABLE ALWAYS;
 
 /*
  * Suppress the deprecation NOTICEs the update script emits (e.g. the reg*
@@ -207,13 +187,6 @@ ALTER EVENT TRIGGER zzz__object_reference_drop ENABLE ALWAYS;
 SET client_min_messages = ERROR;
 ALTER EXTENSION object_reference UPDATE :object_reference_update_to_clause;
 SET client_min_messages = WARNING;
-
-SELECT pg_temp.assert_event_trigger_state('after the committed update', 'D', 'R', 'A');
-
-ALTER EVENT TRIGGER zzz_object_reference_capture ENABLE;
-ALTER EVENT TRIGGER zzz_object_reference__fix_identity ENABLE;
-ALTER EVENT TRIGGER zzz__object_reference_drop ENABLE;
-COMMIT;
 \else
 CREATE EXTENSION object_reference CASCADE;
 \endif
