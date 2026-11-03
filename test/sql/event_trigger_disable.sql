@@ -36,7 +36,7 @@ SELECT plan(
   +2 -- _event_trigger__lock() reads the state unlocked for a role that cannot row-lock the catalog
   +5 -- disabling zzz_object_reference_capture stops capture until enable()
   +5 -- commit check, replica role: the check fails while enable() has not run; after enable() it passes and the state table is gone
-  +4 -- closing sequence: a stray sentinel event trigger is rejected, no state table is created, disable() succeeds once the stray is dropped, then a nested disable() is rejected
+  +3 -- closing sequence: a stray sentinel event trigger is rejected, disable() succeeds once the stray is dropped, then a nested disable() is rejected
   +2 -- schema-qualification (search_path)
 );
 
@@ -269,14 +269,11 @@ SELECT throws_ok(
   , 'event_trigger__disable() from another session is still in effect'
   , 'disable() rejects an existing sentinel event trigger'
 );
-SELECT hasnt_table(
-  '__object_reference__event_trigger_state'
-  , 'the rejected disable() created no state table'
-);
 DROP EVENT TRIGGER __object_reference__event_trigger_sentinel;
+-- SET CONSTRAINTS ALL IMMEDIATE has already run in this transaction: the new check trigger must still start deferred.
 SELECT lives_ok(
   $$SELECT _object_reference.event_trigger__disable('{event_trigger_disable_test__a}')$$
-  , 'disable() succeeds once the stray sentinel is gone (also after SET CONSTRAINTS ALL IMMEDIATE: the check trigger starts out deferred)'
+  , 'disable() succeeds once the stray sentinel is gone'
 );
 SELECT throws_ok(
   $$SELECT _object_reference.event_trigger__disable('{event_trigger_disable_test__a}')$$

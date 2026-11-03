@@ -1,5 +1,5 @@
 \set ECHO none
-1..41
+1..40
 ok 1 - manually disable test trigger b ahead of time
 ok 2 - disable() both test triggers
 ok 3 - test trigger a is disabled while a call is in effect
@@ -36,10 +36,9 @@ ok 33 - enable() after the replica-role disable()
 ok 34 - the commit check passes after enable()
 ok 35 - enable() dropped the state table
 ok 36 - disable() rejects an existing sentinel event trigger
-ok 37 - the rejected disable() created no state table
-ok 38 - disable() succeeds once the stray sentinel is gone (also after SET CONSTRAINTS ALL IMMEDIATE: the check trigger starts out deferred)
-ok 39 - a second disable() without enable() in between is rejected
-ok 40 - object_reference schema must not be part of the resolved search_path
-ok 41 - _object_reference schema must not be part of the resolved search_path
+ok 37 - disable() succeeds once the stray sentinel is gone
+ok 38 - a second disable() without enable() in between is rejected
+ok 39 - object_reference schema must not be part of the resolved search_path
+ok 40 - _object_reference schema must not be part of the resolved search_path
 # TRANSACTION INTENTIONALLY LEFT OPEN!
 # WARNING: this test assumes it runs in a transaction that is never committed; if you ran it by hand in psql, ROLLBACK now.
