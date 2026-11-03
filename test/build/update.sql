@@ -1,6 +1,6 @@
 \set ECHO none
 /*
- * Update-mode scenarios (make test TEST_LOAD_SOURCE=update): install the old version, then
+ * Update-mode scenarios (make test--update): install the old version, then
  * ALTER EXTENSION UPDATE, in rolled-back transactions, so nothing persists.
  * Scenarios 1-3 start a capture group; each asserts the event trigger state it
  * starts the update from, updates, and checks the result:

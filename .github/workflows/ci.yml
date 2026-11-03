@@ -145,8 +145,8 @@ jobs:
         run: make verify-results
       - name: Test the update path on PostgreSQL ${{ matrix.pg }}
         # Runs the same suite against a database installed at TEST_UPDATE_FROM
-        # and then ALTER EXTENSION UPDATEd. Uses verify-results rather than
-        # `make test-update`: that wraps `make test`, which never fails the step.
+        # and then ALTER EXTENSION UPDATEd.
+        # Not `make test--update`: that wraps `make test`, which never fails the step.
         run: make verify-results TEST_LOAD_SOURCE=update
 
   # A single stable check name for use as a required status check in branch

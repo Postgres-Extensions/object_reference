@@ -50,12 +50,13 @@ TEST_UPDATE_TO ?=
 
 export PGOPTIONS := $(PGOPTIONS) -c object_reference.test_load_mode=$(TEST_LOAD_SOURCE) -c object_reference.test_update_from=$(TEST_UPDATE_FROM) -c object_reference.test_update_to=$(TEST_UPDATE_TO)
 
-# Human shorthand for `make test TEST_LOAD_SOURCE=update`; CI and scripts use
-# the TEST_LOAD_SOURCE form directly.
+# `test--update` is the preferred name (`<target>--<flavor>` names a flavor of
+# that target); `test-update` is a synonym for anyone who types a single dash.
+# CI and scripts may use the underlying TEST_LOAD_SOURCE variable directly.
 # Must recurse (a fresh $(MAKE)) rather than depend on `test`, so the
 # parse-time TEST_LOAD_SOURCE conditional above re-evaluates with update set.
-.PHONY: test-update
-test-update:
+.PHONY: test--update test-update
+test--update test-update:
 	$(MAKE) test TEST_LOAD_SOURCE=update
 
 include pgxntool/base.mk
