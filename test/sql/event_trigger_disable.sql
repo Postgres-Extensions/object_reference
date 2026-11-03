@@ -27,8 +27,6 @@ SELECT plan(
   0
   +7 -- multi-trigger disable/enable preserves each one's own prior state
   +4 -- the sentinel exists while a call is in effect and is gone, function included, after enable()
-  +3 -- nested disable() without an intervening enable() is rejected
-  +4 -- disable() rejects a sentinel event trigger left by another session, before changing anything
   +1 -- enable() without a matching disable() is rejected
   +1 -- disable() rejects an unknown event trigger name
   +1 -- disable() rejects a duplicate name in its own argument list
@@ -36,6 +34,7 @@ SELECT plan(
   +4 -- names passed unsorted are processed in "C" order
   +3 -- _event_trigger__lock() reads the state unlocked, with no advisory lock, for a role that cannot row-lock the catalog
   +5 -- disabling zzz_object_reference_capture stops capture until enable()
+  +4 -- closing sequence: a stray sentinel event trigger is rejected, then a nested disable() is rejected
   +2 -- schema-qualification (search_path)
 );
 
@@ -88,45 +87,6 @@ SELECT ok(
 SELECT ok(
   to_regprocedure('pg_temp.__object_reference__event_trigger_sentinel()') IS NULL
   , 'enable() dropped the sentinel function'
-);
-
--- Nested disable() without an intervening enable()
-SELECT lives_ok(
-  $$SELECT _object_reference.event_trigger__disable('{event_trigger_disable_test__a}')$$
-  , 'disable() the first time'
-);
-SELECT throws_ok(
-  $$SELECT _object_reference.event_trigger__disable('{event_trigger_disable_test__a}')$$
-  , '55000'
-  , 'event_trigger__disable() called while a previous call is still in effect'
-  , 'a second disable() without enable() in between is rejected'
-);
-SELECT lives_ok(
-  $$SELECT _object_reference.event_trigger__enable()$$
-  , 'enable() cleans up so later tests are unaffected'
-);
-
--- A sentinel event trigger that this session did not create
-CREATE EVENT TRIGGER __object_reference__event_trigger_sentinel ON ddl_command_end EXECUTE FUNCTION event_trigger_disable_test__noop();
-SELECT throws_ok(
-  $$SELECT _object_reference.event_trigger__disable('{event_trigger_disable_test__a}')$$
-  , '55000'
-  , 'event_trigger__disable() from another session is still in effect'
-  , 'disable() rejects an existing sentinel event trigger'
-);
-SELECT is(
-  to_regclass('pg_temp.__object_reference__event_trigger_state')
-  , NULL
-  , 'the rejected disable() created no state table'
-);
-DROP EVENT TRIGGER __object_reference__event_trigger_sentinel;
-SELECT lives_ok(
-  $$SELECT _object_reference.event_trigger__disable('{event_trigger_disable_test__a}')$$
-  , 'disable() succeeds once the stray sentinel is gone'
-);
-SELECT lives_ok(
-  $$SELECT _object_reference.event_trigger__enable()$$
-  , 'enable() cleans up so later tests are unaffected'
 );
 
 -- enable() without a matching disable()
@@ -260,6 +220,31 @@ SELECT is(
 SELECT lives_ok(
   $$SELECT object_reference.capture__stop('event_trigger_disable_test_group')$$
   , 'stop the capture group'
+);
+
+-- Must stay last: this sequence leaves a disable() call in effect.
+CREATE EVENT TRIGGER __object_reference__event_trigger_sentinel ON ddl_command_end EXECUTE FUNCTION event_trigger_disable_test__noop();
+SELECT throws_ok(
+  $$SELECT _object_reference.event_trigger__disable('{event_trigger_disable_test__a}')$$
+  , '55000'
+  , 'event_trigger__disable() from another session is still in effect'
+  , 'disable() rejects an existing sentinel event trigger'
+);
+SELECT is(
+  to_regclass('pg_temp.__object_reference__event_trigger_state')
+  , NULL
+  , 'the rejected disable() created no state table'
+);
+DROP EVENT TRIGGER __object_reference__event_trigger_sentinel;
+SELECT lives_ok(
+  $$SELECT _object_reference.event_trigger__disable('{event_trigger_disable_test__a}')$$
+  , 'disable() succeeds once the stray sentinel is gone'
+);
+SELECT throws_ok(
+  $$SELECT _object_reference.event_trigger__disable('{event_trigger_disable_test__a}')$$
+  , '55000'
+  , 'event_trigger__disable() called while a previous call is still in effect'
+  , 'a second disable() without enable() in between is rejected'
 );
 
 \i test/finish.sql
