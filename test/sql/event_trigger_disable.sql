@@ -34,7 +34,7 @@ SELECT plan(
   +4 -- names passed unsorted are processed in "C" order
   +3 -- _event_trigger__lock() reads the state unlocked, with no advisory lock, for a role that cannot row-lock the catalog
   +5 -- disabling zzz_object_reference_capture stops capture until enable()
-  +4 -- closing sequence: a stray sentinel event trigger is rejected, then a nested disable() is rejected
+  +4 -- closing sequence: a stray sentinel event trigger is rejected, no state table is created, disable() succeeds once the stray is dropped, then a nested disable() is rejected
   +2 -- schema-qualification (search_path)
 );
 
