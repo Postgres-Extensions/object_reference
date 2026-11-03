@@ -359,9 +359,7 @@ BEGIN
 
   /*
    * Fails the commit while any state row remains, i.e. enable() has not run.
-   * ENABLE ALWAYS so session_replication_role can't skip it. Created after the
-   * disable loop, and the state rows go in after it: this CREATE fires any
-   * still-enabled capture trigger, which the caller is expected to have named above.
+   * ENABLE ALWAYS so session_replication_role can't skip it.
    */
   CREATE CONSTRAINT TRIGGER __object_reference__event_trigger_state_check
     AFTER INSERT ON pg_temp.__object_reference__event_trigger_state

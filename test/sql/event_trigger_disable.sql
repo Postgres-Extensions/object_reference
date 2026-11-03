@@ -34,7 +34,7 @@ SELECT plan(
   +4 -- names passed unsorted are processed in "C" order
   +3 -- _event_trigger__lock() reads the state unlocked, with no advisory lock, for a role that cannot row-lock the catalog
   +5 -- disabling zzz_object_reference_capture stops capture until enable()
-  +10 -- commit check: a disable() without enable() fails at commit (also under replica), a normal pair does not, and a later disable()/enable() cycle works
+  +11 -- commit check: a disable() without enable() fails at commit (also under replica), a normal pair does not, and a later disable()/enable() cycle works
   +4 -- closing sequence: a stray sentinel event trigger is rejected, no state table is created, disable() succeeds once the stray is dropped, then a nested disable() is rejected
   +2 -- schema-qualification (search_path)
 );
@@ -258,7 +258,7 @@ SELECT lives_ok(
 );
 SELECT lives_ok(
   $$SET CONSTRAINTS ALL IMMEDIATE$$
-  , 'the commit check passes after enable() (and leaves ALL IMMEDIATE in force, which the next disable() must tolerate)'
+  , 'the commit check passes after enable()'
 );
 SELECT is(
   to_regclass('pg_temp.__object_reference__event_trigger_state')
@@ -267,7 +267,13 @@ SELECT is(
 );
 SELECT lives_ok(
   $$SELECT _object_reference.event_trigger__disable('{event_trigger_disable_test__a}')$$
-  , 'disable() again in the same transaction'
+  , 'disable() again after SET CONSTRAINTS ALL IMMEDIATE (the check trigger must start out deferred)'
+);
+SELECT throws_ok(
+  $$SET CONSTRAINTS ALL IMMEDIATE$$
+  , '55000'
+  , 'transaction committed without event_trigger__enable() after event_trigger__disable()'
+  , 'SET CONSTRAINTS ALL IMMEDIATE between disable() and enable() raises'
 );
 SELECT lives_ok(
   $$SELECT _object_reference.event_trigger__enable()$$
