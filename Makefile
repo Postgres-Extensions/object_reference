@@ -50,7 +50,8 @@ TEST_UPDATE_TO ?=
 
 export PGOPTIONS := $(PGOPTIONS) -c object_reference.test_load_mode=$(TEST_LOAD_SOURCE) -c object_reference.test_update_from=$(TEST_UPDATE_FROM) -c object_reference.test_update_to=$(TEST_UPDATE_TO)
 
-# Convenience wrapper: `make test-update` == `make test TEST_LOAD_SOURCE=update`.
+# Human shorthand for `make test TEST_LOAD_SOURCE=update`; CI and scripts use
+# the TEST_LOAD_SOURCE form directly.
 # Must recurse (a fresh $(MAKE)) rather than depend on `test`, so the
 # parse-time TEST_LOAD_SOURCE conditional above re-evaluates with update set.
 .PHONY: test-update
