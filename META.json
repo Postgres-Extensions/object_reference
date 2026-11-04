@@ -16,7 +16,7 @@
     "name": "object_reference",
 
     "X_comment": "REQUIRED. Version of the distribution. http://pgxn.org/spec/#version",
-    "version": "0.1.0",
+    "version": "0.2.0",
 
     "X_comment": "REQUIRED. Short description of distribution.",
     "abstract": "Provides immutable references to Postgres objects.",
@@ -40,7 +40,7 @@
             "file": "sql/object_reference.sql",
 
             "X_comment": "REQUIRED. Version the extension is at.",
-            "version": "0.1.0",
+            "version": "0.2.0",
 
             "X_comment": "Optional: \"abstract\": Description of the extension.",
             "abstract": "Provides immutable references to Postgres objects.",
