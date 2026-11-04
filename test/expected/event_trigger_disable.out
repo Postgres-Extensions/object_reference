@@ -1,0 +1,44 @@
+\set ECHO none
+1..40
+ok 1 - manually disable test trigger b ahead of time
+ok 2 - disable() both test triggers
+ok 3 - test trigger a is disabled while a call is in effect
+ok 4 - test trigger b is (still) disabled while a call is in effect
+ok 5 - the sentinel event trigger is enabled on ddl_command_end while a call is in effect
+ok 6 - the sentinel function exists while a call is in effect
+ok 7 - enable() restores both
+ok 8 - test trigger a is back to its original (origin) state
+ok 9 - test trigger b is still disabled -- its prior state was preserved, not assumed enabled
+ok 10 - enable() dropped the sentinel event trigger
+ok 11 - enable() dropped the sentinel function
+ok 12 - enable() without disable() is rejected
+ok 13 - disable() rejects an unknown event trigger name
+ok 14 - disable() rejects a duplicate name in its own argument list
+ok 15 - disable() rejects a NULL array
+ok 16 - disable() rejects an empty array
+ok 17 - disable() rejects a NULL element
+ok 18 - disable() with unsorted names
+ok 19 - names were processed in "C" collation order, not input order
+ok 20 - the commit check fails while enable() has not run
+ok 21 - SET CONSTRAINTS ALL IMMEDIATE between disable() and enable() raises
+ok 22 - enable() after unsorted disable()
+ok 23 - all three restored
+ok 24 - helper does not fail for a role that cannot row-lock the catalog
+ok 25 - helper still returns the trigger's evtenabled
+ok 26 - start a capture group
+ok 27 - disable() zzz_object_reference_capture
+ok 28 - enable() restores zzz_object_reference_capture
+ok 29 - only the table created after enable() was captured
+ok 30 - stop the capture group
+ok 31 - disable() under session_replication_role = replica
+ok 32 - the commit check also fails under session_replication_role = replica
+ok 33 - enable() after the replica-role disable()
+ok 34 - the commit check passes after enable()
+ok 35 - enable() dropped the state table
+ok 36 - disable() rejects an existing sentinel event trigger
+ok 37 - disable() succeeds once the stray sentinel is gone
+ok 38 - a second disable() without enable() in between is rejected
+ok 39 - object_reference schema must not be part of the resolved search_path
+ok 40 - _object_reference schema must not be part of the resolved search_path
+# TRANSACTION INTENTIONALLY LEFT OPEN!
+# WARNING: this test assumes it runs in a transaction that is never committed; if you ran it by hand in psql, ROLLBACK now.

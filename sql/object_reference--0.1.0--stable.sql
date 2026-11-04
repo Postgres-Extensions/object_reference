@@ -1,4 +1,41 @@
 /*
+ * Disables all three event triggers for this script (a hand-written copy of
+ * event_trigger__disable(), which 0.1.0 lacks); event_trigger__enable() at the
+ * end restores them. See the sentinel note on event_trigger__disable() below.
+ */
+-- Unlike disable(), this does not check for an existing sentinel: a committed one fails with the plain "already exists" error.
+CREATE FUNCTION pg_temp.__object_reference__event_trigger_sentinel() RETURNS event_trigger LANGUAGE plpgsql AS 'BEGIN END';
+CREATE EVENT TRIGGER __object_reference__event_trigger_sentinel
+  ON ddl_command_end
+  EXECUTE PROCEDURE pg_temp.__object_reference__event_trigger_sentinel()
+;
+CREATE TEMP TABLE __object_reference__event_trigger_state AS
+  SELECT evtname, evtenabled FROM pg_catalog.pg_event_trigger WHERE false
+;
+ALTER TABLE pg_temp.__object_reference__event_trigger_state ADD PRIMARY KEY (evtname);
+DO $$
+DECLARE
+  v_name pg_catalog.pg_event_trigger.evtname%TYPE;
+  v_enabled pg_catalog.pg_event_trigger.evtenabled%TYPE;
+BEGIN
+  FOR v_name IN
+    SELECT n
+      FROM unnest('{zzz__object_reference_drop,zzz_object_reference__fix_identity,zzz_object_reference_capture}'::name[]) n
+      ORDER BY n COLLATE "C"
+  LOOP
+    BEGIN
+      SELECT evtenabled INTO v_enabled FROM pg_catalog.pg_event_trigger WHERE evtname = v_name FOR UPDATE;
+    EXCEPTION WHEN insufficient_privilege THEN
+      RAISE WARNING 'could not lock the pg_event_trigger row of event trigger "%"; reading its state without a lock, so races with ALTER EVENT TRIGGER are possible', v_name;
+      SELECT evtenabled INTO v_enabled FROM pg_catalog.pg_event_trigger WHERE evtname = v_name;
+    END;
+    EXECUTE format('ALTER EVENT TRIGGER %I DISABLE', v_name);
+    INSERT INTO pg_temp.__object_reference__event_trigger_state(evtname, evtenabled) VALUES (v_name, v_enabled);
+  END LOOP;
+END
+$$;
+
+/*
  * Uses a private __object_reference schema, mirroring
  * sql/object_reference.sql's own bootstrap/teardown convention, so every
  * function recreated here goes through the same REVOKE ALL FROM PUBLIC /
@@ -105,34 +142,6 @@ END
 $body$;
 
 /*
- * 0.1.0 already installed this extension's own event triggers, and they
- * stay active for the rest of THIS session while the structural changes
- * below run. zzz__object_reference_drop in particular queries
- * _object_reference._object_v inside its own body, so it would fire -- and
- * error, since the view is momentarily gone -- the instant this script drops
- * that view a few statements down. All three are default-enabled (origin),
- * so setting session_replication_role = replica suppresses them for the
- * structural section below.
- *
- * This script is not necessarily the only thing running in its transaction
- * -- ALTER EXTENSION UPDATE can be issued as one statement among several in
- * a caller-managed transaction -- so session_replication_role cannot simply
- * be left disturbed for "the rest of the transaction" to sort out, and
- * whatever it's restored to afterward must be the caller's actual prior
- * value, not an assumed 'origin' default (the caller may already have it set
- * to something else for their own reasons). Stashed in a placeholder GUC
- * (there's no other way to carry a value between separate top-level
- * statements in a plain multi-statement SQL script -- this isn't a single
- * PL/pgSQL block) and restored explicitly right after the cleanup at the end
- * of this script, once every object the event triggers reference is back in
- * its final, current-source shape. A fresh install never hits this: it
- * creates these event triggers only at the very end, once nothing they
- * reference is still being modified.
- */
-SELECT set_config('object_reference.saved_session_replication_role', current_setting('session_replication_role'), true);
-SET LOCAL session_replication_role = replica;
-
-/*
  * _is_own_object(): true for members of the object_reference extension itself;
  * _object_v__for_update() uses it to refuse tracking them.
  */
@@ -170,6 +179,265 @@ SELECT
 FROM (SELECT oid, extnamespace FROM pg_catalog.pg_extension WHERE extname = 'object_reference') e
 $body$
   , 'Is the object a member of the object_reference extension itself? (pg_depend deptype = e membership, not just co-installation.)'
+);
+
+/*
+ * Takes the row lock event_trigger__disable() relies on to block a concurrent raw
+ * ALTER EVENT TRIGGER of the same trigger until commit.
+ */
+SELECT __object_reference.create_function(
+  '_object_reference._event_trigger__lock'
+  , $args$
+  event_trigger_name pg_catalog.pg_event_trigger.evtname%TYPE
+$args$
+  , 'pg_catalog.pg_event_trigger.evtenabled%TYPE LANGUAGE plpgsql'
+  , $body$
+DECLARE
+  v_enabled pg_catalog.pg_event_trigger.evtenabled%TYPE;
+BEGIN
+  BEGIN
+    SELECT evtenabled INTO v_enabled
+      FROM pg_catalog.pg_event_trigger
+      WHERE evtname = event_trigger_name
+      FOR UPDATE
+    ;
+  EXCEPTION WHEN insufficient_privilege THEN
+    -- No catalog UPDATE rights: the row can't be locked.
+    RAISE WARNING 'could not lock the pg_event_trigger row of event trigger "%"; reading its state without a lock, so races with ALTER EVENT TRIGGER are possible', event_trigger_name;
+    SELECT evtenabled INTO v_enabled FROM pg_catalog.pg_event_trigger WHERE evtname = event_trigger_name;
+  END;
+
+  -- NULL if the trigger does not exist
+  RETURN v_enabled;
+END
+$body$
+  , 'Row-lock one event trigger where privileges allow, and return its current evtenabled (NULL if it does not exist).'
+);
+
+SELECT __object_reference.create_function(
+  '_object_reference._event_trigger__state_check'
+  , ''
+  , 'trigger LANGUAGE plpgsql'
+  , $body$
+BEGIN
+  IF EXISTS (SELECT 1 FROM pg_temp.__object_reference__event_trigger_state) THEN
+    RAISE 'transaction committed without event_trigger__enable() after event_trigger__disable()'
+      USING ERRCODE = 'object_not_in_prerequisite_state'
+        , HINT = 'Call _object_reference.event_trigger__enable() before committing.'
+    ;
+  END IF;
+  RETURN NULL;
+END
+$body$
+  , 'Deferred constraint trigger function: fail the commit if event_trigger__enable() has not run.'
+);
+
+/*
+ * event_trigger__disable(names) disables the named event triggers, and
+ * event_trigger__enable() restores each one's exact prior state. Both are
+ * internal: for this extension's own update scripts, not the public API.
+ * Avoid disabling event triggers wherever another option exists.
+ *
+ * The caller names the triggers, rather than this disabling all of them, so
+ * that no trigger is disabled (or locked) beyond what the caller needs.
+ *
+ * Call enable() in the same transaction as disable(): committing without it
+ * raises an error (a deferred constraint trigger on the state table,
+ * _event_trigger__state_check()), so the commit rolls back and the triggers
+ * stay as they were. The disable therefore never becomes visible to other
+ * sessions, and an error needs no cleanup logic. A hand-run ALTER EVENT TRIGGER
+ * is not covered. disable() locks each trigger's catalog row before reading
+ * its state (_event_trigger__lock()), which blocks a concurrent raw ALTER EVENT
+ * TRIGGER of the same trigger until the transaction ends.
+ *
+ * If a capture group is active, include zzz_object_reference_capture in the
+ * names: disable() creates the check trigger (a CREATE, which capture records
+ * unless disabled), and capture does not skip it.
+ *
+ * disable() first creates a no-op ddl_command_end event trigger, the sentinel,
+ * which enable() drops after restoring every state. While every sql_drop,
+ * table_rewrite and ddl_command_end event trigger is disabled, Postgres gives
+ * the commands nested in an extension script no event trigger state of their
+ * own: it collects them onto the enclosing CREATE/ALTER EXTENSION and replays
+ * them to that command's ddl_command_end once the triggers are back. There,
+ * pg_event_trigger_ddl_commands() fails on objects dropped since (before
+ * PostgreSQL 14) or hands capture the script's own objects. One enabled event
+ * trigger prevents the collection. The sentinel's function is in pg_temp,
+ * which capture skips.
+ *
+ * name[] and "char"[] stand in for %TYPE[], which signatures never accept and
+ * PL/pgSQL DECLARE accepts only from PostgreSQL 17.
+ */
+SELECT __object_reference.create_function(
+  '_object_reference.event_trigger__disable'
+  , $args$
+  event_trigger_names name[]
+$args$
+  , 'void LANGUAGE plpgsql'
+  , $body$
+DECLARE
+  v_name pg_catalog.pg_event_trigger.evtname%TYPE;
+  v_enabled pg_catalog.pg_event_trigger.evtenabled%TYPE;
+  -- name[] and "char"[] stand in for %TYPE[], as in the header comment.
+  v_names name[] := '{}';
+  v_states "char"[] := '{}';
+BEGIN
+  IF event_trigger_names IS NULL OR coalesce(array_length(event_trigger_names, 1), 0) = 0 THEN
+    RAISE 'event_trigger_names must be a non-empty array'
+      USING ERRCODE = 'invalid_parameter_value'
+    ;
+  END IF;
+
+  IF array_position(event_trigger_names, NULL) IS NOT NULL THEN
+    RAISE 'event_trigger_names contains a NULL name'
+      USING ERRCODE = 'invalid_parameter_value'
+        , DETAIL = event_trigger_names::text
+    ;
+  END IF;
+
+  IF array_length(event_trigger_names, 1) <> (SELECT count(DISTINCT x) FROM unnest(event_trigger_names) x) THEN
+    RAISE 'event_trigger_names contains a duplicate name'
+      USING ERRCODE = 'invalid_parameter_value'
+        , DETAIL = event_trigger_names::text
+    ;
+  END IF;
+
+  SELECT n INTO v_name
+    FROM unnest(event_trigger_names) n
+    WHERE NOT EXISTS (SELECT 1 FROM pg_catalog.pg_event_trigger WHERE evtname = n)
+    LIMIT 1
+  ;
+  IF FOUND THEN
+    RAISE 'event trigger "%" does not exist', v_name
+      USING ERRCODE = 'undefined_object'
+    ;
+  END IF;
+
+  IF to_regclass('pg_temp.__object_reference__event_trigger_state') IS NOT NULL THEN
+    RAISE 'event_trigger__disable() called while a previous call is still in effect'
+      USING ERRCODE = 'object_not_in_prerequisite_state'
+        , HINT = 'A previous event_trigger__enable() call may have been skipped.'
+    ;
+  END IF;
+
+  -- A committed sentinel (another session's, or one left by a commit that bypassed the state check) would make CREATE EVENT TRIGGER below fail with a plain "already exists".
+  IF EXISTS (SELECT 1 FROM pg_catalog.pg_event_trigger WHERE evtname = '__object_reference__event_trigger_sentinel') THEN
+    RAISE 'event_trigger__disable() from another session is still in effect'
+      USING ERRCODE = 'object_not_in_prerequisite_state'
+        , HINT = 'Wait for that session to finish, or drop event trigger __object_reference__event_trigger_sentinel if it was left behind without event_trigger__enable().'
+    ;
+  END IF;
+
+  -- The sentinel, before anything is disabled
+  CREATE FUNCTION pg_temp.__object_reference__event_trigger_sentinel() RETURNS event_trigger LANGUAGE plpgsql AS 'BEGIN END';
+  CREATE EVENT TRIGGER __object_reference__event_trigger_sentinel
+    ON ddl_command_end
+    EXECUTE PROCEDURE pg_temp.__object_reference__event_trigger_sentinel()
+  ;
+
+  CREATE TEMP TABLE __object_reference__event_trigger_state AS
+    SELECT evtname, evtenabled FROM pg_catalog.pg_event_trigger WHERE false
+  ;
+  ALTER TABLE pg_temp.__object_reference__event_trigger_state ADD PRIMARY KEY (evtname);
+
+  -- Sorting in "C" collation gives every caller the same lock order, so two callers (ourselves included) can't deadlock on each other's triggers.
+  FOR v_name IN SELECT n FROM unnest(event_trigger_names) n ORDER BY n COLLATE "C" LOOP
+    v_enabled := _object_reference._event_trigger__lock(v_name);
+
+    -- Dropped by another session since the check above
+    IF v_enabled IS NULL THEN
+      RAISE 'event trigger "%" was dropped concurrently', v_name
+        USING ERRCODE = 'undefined_object'
+      ;
+    END IF;
+
+    PERFORM _object_reference.exec(format('ALTER EVENT TRIGGER %I DISABLE', v_name));
+
+    v_names := v_names || v_name;
+    v_states := v_states || v_enabled;
+  END LOOP;
+
+  /*
+   * Fails the commit while any state row remains, i.e. enable() has not run.
+   * ENABLE ALWAYS so session_replication_role can't skip it.
+   */
+  CREATE CONSTRAINT TRIGGER __object_reference__event_trigger_state_check
+    AFTER INSERT ON pg_temp.__object_reference__event_trigger_state
+    DEFERRABLE INITIALLY DEFERRED
+    FOR EACH ROW EXECUTE FUNCTION _object_reference._event_trigger__state_check()
+  ;
+  ALTER TABLE pg_temp.__object_reference__event_trigger_state
+    ENABLE ALWAYS TRIGGER __object_reference__event_trigger_state_check
+  ;
+  -- A caller's earlier SET CONSTRAINTS ALL IMMEDIATE would otherwise apply to this new trigger too.
+  SET CONSTRAINTS pg_temp.__object_reference__event_trigger_state_check DEFERRED;
+  INSERT INTO pg_temp.__object_reference__event_trigger_state(evtname, evtenabled)
+    SELECT * FROM unnest(v_names, v_states)
+  ;
+END
+$body$
+  , 'Disable the given event triggers, remembering their exact prior state; pair with event_trigger__enable().'
+);
+SELECT __object_reference.create_function(
+  '_object_reference.event_trigger__enable'
+  , ''
+  , 'void LANGUAGE plpgsql'
+  , $body$
+DECLARE
+  -- name[] and "char"[] stand in for %TYPE[], as in disable().
+  v_names name[];
+  v_states "char"[];
+  i int;
+BEGIN
+  IF to_regclass('pg_temp.__object_reference__event_trigger_state') IS NULL THEN
+    RAISE 'event_trigger__enable() called without a matching event_trigger__disable()'
+      USING ERRCODE = 'object_not_in_prerequisite_state'
+    ;
+  END IF;
+
+  /*
+   * Same sorted order as disable(): these ALTERs take the row locks again, and
+   * one order for every caller prevents deadlock.
+   */
+  SELECT array_agg(evtname ORDER BY evtname COLLATE "C"), array_agg(evtenabled ORDER BY evtname COLLATE "C")
+    INTO v_names, v_states
+    FROM pg_temp.__object_reference__event_trigger_state
+  ;
+
+  /*
+   * Dropped before anything is restored, so this DROP fires none of the restored triggers.
+   * The commit check's pending events make DROP TABLE fail, so empty the table and fire them (harmlessly) first.
+   * The update script's hand-written disable creates the table without the check trigger.
+   */
+  IF EXISTS (
+    SELECT 1 FROM pg_catalog.pg_trigger
+      WHERE tgrelid = 'pg_temp.__object_reference__event_trigger_state'::regclass
+        AND tgname = '__object_reference__event_trigger_state_check'
+  ) THEN
+    DELETE FROM pg_temp.__object_reference__event_trigger_state;
+    SET CONSTRAINTS pg_temp.__object_reference__event_trigger_state_check IMMEDIATE;
+  END IF;
+  DROP TABLE pg_temp.__object_reference__event_trigger_state;
+
+  FOR i IN 1..coalesce(array_length(v_names, 1), 0) LOOP
+    PERFORM _object_reference.exec(format(
+      'ALTER EVENT TRIGGER %I %s'
+      , v_names[i]
+      , CASE v_states[i]
+          WHEN 'O' THEN 'ENABLE'
+          WHEN 'R' THEN 'ENABLE REPLICA'
+          WHEN 'A' THEN 'ENABLE ALWAYS'
+          WHEN 'D' THEN 'DISABLE'
+        END
+    ));
+  END LOOP;
+
+  -- Only now that every state is restored (see the sentinel note above event_trigger__disable())
+  DROP EVENT TRIGGER __object_reference__event_trigger_sentinel;
+  DROP FUNCTION pg_temp.__object_reference__event_trigger_sentinel();
+END
+$body$
+  , 'Restore event triggers disabled by event_trigger__disable() to their exact prior state.'
 );
 
 /*
@@ -726,11 +994,7 @@ DROP FUNCTION __object_reference.exec(
 );
 DROP SCHEMA __object_reference;
 
-/*
- * Restore session_replication_role to the caller's actual prior value
- * (saved near the top of this script), now that the structural section and
- * its cleanup are both done.
- */
-SELECT set_config('session_replication_role', current_setting('object_reference.saved_session_replication_role'), true);
+-- Restores the event triggers disabled at the top of this script.
+SELECT _object_reference.event_trigger__enable();
 
 -- vi: expandtab sw=2 ts=2

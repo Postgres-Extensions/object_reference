@@ -1,5 +1,9 @@
 \set ECHO none
 
+-- This flow installs the extension itself, whatever TEST_LOAD_SOURCE says.
+\set QUIET on
+SET object_reference.test_load_mode = 'fresh';
+\set QUIET off
 \i test/load.sql
 
 /*

@@ -3,6 +3,30 @@
 SET search_path = tap, public;
 
 /*
+ * In update and existing modes the extension must be installed at the version
+ * under test; raising here fails every test file otherwise, so `make` fails
+ * when test/install/load.sql stopped short.
+ */
+DO $$
+DECLARE
+  v_mode text := current_setting('object_reference.test_load_mode', true);
+  v_installed text := (SELECT extversion FROM pg_catalog.pg_extension WHERE extname = 'object_reference');
+  v_expected text;
+BEGIN
+  IF v_mode IN ('update', 'existing') THEN
+    v_expected := coalesce(
+      CASE WHEN v_mode = 'update' THEN nullif(current_setting('object_reference.test_update_to', true), '') END
+      , (SELECT default_version FROM pg_catalog.pg_available_extensions WHERE name = 'object_reference')
+    );
+    IF v_installed IS DISTINCT FROM v_expected THEN
+      RAISE EXCEPTION 'object_reference is at version % in % mode, expected %'
+        , coalesce(v_installed, '(not installed)'), v_mode, v_expected;
+    END IF;
+  END IF;
+END
+$$;
+
+/*
  * The extension is normally already installed -- committed, once -- by
  * test/install/load.sql before this file ever runs (see that file for the
  * fresh/update/existing mode switch); IF NOT EXISTS makes the statement

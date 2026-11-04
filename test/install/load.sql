@@ -176,7 +176,10 @@ SELECT CASE WHEN :'object_reference_test_update_to' = '' THEN ''
  */
 CREATE EXTENSION IF NOT EXISTS count_nulls;
 
+SET client_min_messages = WARNING;
+
 CREATE EXTENSION object_reference VERSION :'object_reference_test_update_from' CASCADE;
+
 /*
  * Suppress the deprecation NOTICEs the update script emits (e.g. the reg*
  * pseudotype removal), matching cat_tools' own install/load.sql.
