@@ -135,19 +135,13 @@ jobs:
       - name: Install rsync
         run: apt-get install -y rsync
       - name: Test on PostgreSQL ${{ matrix.pg }}
-        # `make test` alone never fails this step: pgxntool/base.mk (as
-        # vendored here, 2.2.0) marks its underlying installcheck .IGNORE,
-        # so a regression exits 0 and only prints the diff. verify-results is
-        # the real gate -- it runs the same TEST_DEPS chain, then actually
-        # inspects the pgTAP results (PGXNTOOL_ENABLE_VERIFY_RESULTS defaults
-        # to yes, PGXNTOOL_VERIFY_RESULTS_MODE to pgtap, matching this
-        # suite's pgTAP-based tests) and exits non-zero on failure.
+        # verify-results is the stricter documented check: it runs the same
+        # TEST_DEPS chain, then parses the pgTAP results.
         run: make verify-results
       - name: Test the update path on PostgreSQL ${{ matrix.pg }}
         # Runs the same suite against a database installed at TEST_UPDATE_FROM
         # and then ALTER EXTENSION UPDATEd.
-        # Not `make test--update`: that wraps `make test`, which never fails the step.
-        run: make verify-results TEST_LOAD_SOURCE=update
+        run: make test--update
 
   # A single stable check name for use as a required status check in branch
   # protection rules. Matrix jobs produce check names like "🐘 PostgreSQL 14"

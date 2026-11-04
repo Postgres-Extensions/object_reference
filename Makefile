@@ -52,7 +52,7 @@ export PGOPTIONS := $(PGOPTIONS) -c object_reference.test_load_mode=$(TEST_LOAD_
 
 # `test--update` is the preferred name (`<target>--<flavor>` names a flavor of
 # that target); `test-update` is a synonym for anyone who types a single dash.
-# CI and scripts may use the underlying TEST_LOAD_SOURCE variable directly.
+# Scripts may use the underlying TEST_LOAD_SOURCE variable directly.
 # Must recurse (a fresh $(MAKE)) rather than depend on `test`, so the
 # parse-time TEST_LOAD_SOURCE conditional above re-evaluates with update set.
 .PHONY: test--update test-update
