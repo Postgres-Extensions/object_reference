@@ -135,8 +135,8 @@ jobs:
       - name: Install rsync
         run: apt-get install -y rsync
       - name: Test on PostgreSQL ${{ matrix.pg }}
-        # verify-results is the stricter documented check: it runs the same
-        # TEST_DEPS chain, then parses the pgTAP results.
+        # Fresh-mode run: verify-results runs the test chain, then parses the
+        # pgTAP results, which `make test` alone does not.
         run: make verify-results
       - name: Test the update path on PostgreSQL ${{ matrix.pg }}
         # Runs the same suite against a database installed at TEST_UPDATE_FROM
