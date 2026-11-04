@@ -1,4 +1,24 @@
 /*
+ * Requires cat_tools 0.3+ (a control file's `requires` can't carry a
+ * version). Only major.minor is compared; a version without a numeric
+ * major.minor, such as 'stable', is a development build and is let through.
+ */
+DO $$
+DECLARE
+  c_version CONSTANT text := (SELECT extversion FROM pg_catalog.pg_extension WHERE extname = 'cat_tools');
+  c_major_minor CONSTANT text := substring(c_version FROM '^[0-9]+\.[0-9]+');
+BEGIN
+  IF c_major_minor IS NOT NULL AND string_to_array(c_major_minor, '.')::int[] < '{0,3}' THEN
+    RAISE 'object_reference requires cat_tools 0.3.0 or later'
+      USING ERRCODE = 'object_not_in_prerequisite_state'
+        , DETAIL = format('installed cat_tools version is %s', c_version)
+        , HINT = 'Run ALTER EXTENSION cat_tools UPDATE first.'
+    ;
+  END IF;
+END
+$$;
+
+/*
  * Disables all three event triggers for this script (a hand-written copy of
  * event_trigger__disable(), which 0.1.0 lacks); event_trigger__enable() at the
  * end restores them. See the sentinel note on event_trigger__disable() below.
