@@ -15,7 +15,7 @@ Good documentation should be like good code comments - explain things concisely 
 
 # Installation
 
-This extension depends on the `cat_tools` extension.
+This extension requires the `cat_tools` extension, version 0.3.0 or later.
 
 ```sql
 CREATE EXTENSION object_reference CASCADE;
